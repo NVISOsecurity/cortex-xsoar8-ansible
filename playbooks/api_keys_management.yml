@@ -1,0 +1,166 @@
+---
+# API Keys Management Playbook
+# Demonstrates create, gather (with and without filters), and delete operations
+# for XSOAR 8 API keys using the cortex.xsoar8.api_key module.
+#
+# Notes:
+#   - Filters between multiple filter objects use AND logic.
+#   - request_data must contain either filters OR direct fields, not both.
+#   - state=present always creates a new key; if a comment is provided, an
+#     existing key with the same comment is detected and no new key is created.
+#   - Deletion requires a filter on the 'id' field.
+#   - set_max_expiration overrides expiration and sets it to 6 months from now.
+#
+# Usage examples:
+#   ansible-playbook playbooks/api_keys_management.yml --tags create
+#   ansible-playbook playbooks/api_keys_management.yml --tags gather
+#   ansible-playbook playbooks/api_keys_management.yml --tags gather_filtered
+#   ansible-playbook playbooks/api_keys_management.yml --tags delete
+#
+# Adding --check to the command line will run the playbook in check mode, which will show what changes would be made without actually making them.
+
+- name: XSOAR API Key Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE
+    # -------------------------------------------------------------------------
+
+    - name: Create a standard API key for CI/CD automation
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: present
+        request_data:
+          roles:
+            - "Instance Administrator"
+          security_level: "standard"
+          comment: "Automation key for CI/CD pipelines"
+      register: created_key
+      tags:
+        - create
+
+    - name: Create an advanced API key with maximum expiration
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: present
+        request_data:
+          roles:
+            - "Instance Administrator"
+          security_level: "advanced"
+          set_max_expiration: true
+          comment: "Long-lived advanced automation key"
+      register: created_key
+      tags:
+        - create_advanced
+
+    - name: Display created key details (store the plaintext key value immediately) # noqa: no-handler
+      ansible.builtin.debug:
+        msg: |
+          Key ID   : {{ created_key.api_key.id }}
+          Key value: {{ created_key.api_key.key }}
+      when: created_key.changed
+      tags:
+        - create
+        - create_advanced
+
+    - name: Display create result message
+      ansible.builtin.debug:
+        msg: "{{ created_key.msg }}"
+      tags:
+        - create
+        - create_advanced
+
+    # -------------------------------------------------------------------------
+    # GATHER — all non-expired keys | Returns ONLY API keys created through the API (not user-generated keys)
+    # -------------------------------------------------------------------------
+
+    - name: Gather all non-expired API keys
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_keys
+      tags:
+        - gather
+
+    - name: Display gathered keys
+      ansible.builtin.debug:
+        msg: "Found {{ all_keys.api_keys | default([]) | length }} API key(s): {{ all_keys.api_keys | default([]) }}"
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — with filters | Returns both API keys created through the API and user-generated keys
+    # -------------------------------------------------------------------------
+
+    - name: Gather API keys assigned to a specific role
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+        request_data:
+          filters:
+            - field: "roles"
+              operator: "contains"
+              value:
+                - "Instance Administrator"
+      register: admin_keys
+      tags:
+        - gather_filtered
+
+    - name: Display role-filtered keys
+      ansible.builtin.debug:
+        msg: "Admin keys: {{ admin_keys.api_keys | default([]) }}"
+      tags:
+        - gather_filtered
+
+    - name: Gather API keys expiring before a given timestamp
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+        request_data:
+          filters:
+            - field: "expiration"
+              operator: "lte"
+              value: 1767225600000 # epoch ms — adjust as needed
+      register: expiring_keys
+      tags:
+        - gather_filtered
+
+    - name: Display soon-to-expire keys
+      ansible.builtin.debug:
+        msg: "Keys expiring before threshold: {{ expiring_keys.api_keys | default([]) }}"
+      tags:
+        - gather_filtered
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    - name: Delete API keys by ID
+      cortex.xsoar8.api_key:
+        provider: "{{ xsoar_provider }}"
+        state: absent
+        request_data:
+          filters:
+            - field: "id"
+              operator: "in"
+              value:
+                - 28 # replace with actual API key IDs to delete
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: "{{ delete_result.msg }}"
+      tags:
+        - delete

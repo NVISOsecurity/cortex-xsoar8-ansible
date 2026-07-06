@@ -1,0 +1,200 @@
+---
+# Pre-Process Rule Management Playbook
+# Demonstrates create/update, gather (all and by name), and delete
+# operations for XSOAR 8 pre-process rules using the cortex.xsoar8.pre_process_rule module.
+#
+# Supported parameters:
+#   name                — unique rule name (required for present/absent)
+#   action              — action on match: close, drop, dropAndUpdate, link, linkAndClose, script
+#   enabled             — whether the rule is active (default: true)
+#   script_id           — script ID to run; required when action is "script"
+#   propagation_labels  — labels for multi-tenant propagation (default: [])
+#
+# Notes:
+#   - Pre-process rules evaluate incoming events for duplicate detection.
+#   - script_id is required when action is "script".
+#   - Idempotency tracks name, action, enabled, script_id, and propagation_labels.
+#
+# Usage examples:
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_drop
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_link
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_drop_update
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_script
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags gather
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags delete
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Pre-Process Rule Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    rule_name: "Drop Duplicate Phishing Alerts"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — simple action rules
+    # -------------------------------------------------------------------------
+
+    - name: Create a rule that drops duplicate events
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ rule_name }}"
+        action: "drop"
+        enabled: true
+        state: present
+      register: create_rule_result
+      tags:
+        - create_drop
+
+    - name: Create a rule that links duplicate events to the existing incident
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Link Related Malware Incidents"
+        action: "link"
+        enabled: true
+        state: present
+      register: create_rule_result
+      tags:
+        - create_link
+
+    - name: Create a rule that drops and updates the matched incident
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Drop and Update Network Alerts"
+        action: "dropAndUpdate"
+        enabled: true
+        state: present
+      register: create_rule_result
+      tags:
+        - create_drop_update
+
+    - name: Display create result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ create_rule_result.changed | default('n/a') }}
+          Message: {{ create_rule_result.msg | default('not run') }}
+          Rule name: {{ create_rule_result.pre_process_rule.name | default('n/a') }}
+          Rule id: {{ create_rule_result.pre_process_rule.id | default('n/a') }}
+          Rule action: {{ create_rule_result.pre_process_rule.action | default('n/a') }}
+          Rule enabled: {{ create_rule_result.pre_process_rule.enabled | default('n/a') }}
+      tags:
+        - create_drop
+        - create_link
+        - create_drop_update
+
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — script action rule
+    # -------------------------------------------------------------------------
+
+    - name: Create a rule that runs a deduplication script
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Custom Dedup Script Rule"
+        action: "script"
+        script_id: "{{ dedup_script_id | default('replace-with-script-id') }}"
+        enabled: true
+        state: present
+      register: script_rule_result
+      tags:
+        - create_script
+
+    - name: Display script rule result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ script_rule_result.changed }}
+          Message: {{ script_rule_result.msg }}
+      tags:
+        - create_script
+
+    # -------------------------------------------------------------------------
+    # DISABLE a rule (update enabled flag)
+    # -------------------------------------------------------------------------
+
+    - name: Disable a pre-process rule
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ rule_name }}"
+        action: "drop"
+        enabled: false
+        state: present
+      register: disable_result
+      tags:
+        - disable
+
+    - name: Display disable result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ disable_result.changed }}
+          Message: {{ disable_result.msg }}
+      tags:
+        - disable
+
+    # -------------------------------------------------------------------------
+    # GATHER — all rules
+    # -------------------------------------------------------------------------
+
+    - name: Gather all pre-process rules
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_rules
+      tags:
+        - gather
+
+    - name: Display all rules
+      ansible.builtin.debug:
+        msg: "Found {{ all_rules.pre_process_rules | default([]) | length }} rule(s)"
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — single rule by name
+    # -------------------------------------------------------------------------
+
+    - name: Gather a specific rule by name
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ rule_name }}"
+        state: gathered
+      register: rule_info
+      tags:
+        - gather
+
+    - name: Display specific rule details
+      ansible.builtin.debug:
+        msg: |
+          Name   : {{ rule_info.pre_process_rule.name }}
+          ID     : {{ rule_info.pre_process_rule.id }}
+          Action : {{ rule_info.pre_process_rule.action }}
+          Enabled: {{ rule_info.pre_process_rule.enabled }}
+      when: rule_info.pre_process_rule is defined
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    - name: Delete a pre-process rule by name
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ rule_name }}"
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: "{{ delete_result.msg }}"
+      tags:
+        - delete

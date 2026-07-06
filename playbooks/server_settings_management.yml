@@ -1,0 +1,122 @@
+---
+# Server Settings Management Playbook
+# Demonstrates updating, gathering, and deleting XSOAR 8 server settings
+# using the cortex.xsoar8.server_settings module.
+#
+# Supported parameters:
+#   server_settings   — dict of setting key/value pairs to apply (required for state=present)
+#   delete_settings   — list of setting keys to remove (required for state=absent)
+#
+# States:
+#   present  — merge the provided server_settings into the current configuration
+#   absent   — remove the keys listed in delete_settings from the configuration
+#   gathered — retrieve the full current server settings without making changes
+#
+# Notes:
+#   - present merges settings; keys not listed are left unchanged.
+#   - absent only removes the listed keys; all other settings are preserved.
+#   - Idempotency: present only reports changed=True when any listed key differs
+#     from the current value (otherwise the no-op intersection is detected and
+#     no API call is made).
+#   - absent only reports changed=True when at least one listed key is currently
+#     present in the configuration; otherwise it is a no-op.
+#   - Setting keys follow XSOAR dot-notation (e.g., "audit.log.playground.user.commands").
+#
+# Usage examples:
+#   ansible-playbook playbooks/server_settings_management.yml --tags gather
+#   ansible-playbook playbooks/server_settings_management.yml --tags update
+#   ansible-playbook playbooks/server_settings_management.yml --tags delete
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Server Settings Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # GATHER — retrieve all current server settings
+    # -------------------------------------------------------------------------
+
+    - name: Gather all server settings
+      cortex.xsoar8.server_settings:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: settings_result
+      tags:
+        - gather
+
+    - name: Display current server settings
+      ansible.builtin.debug:
+        var: settings_result.server_settings
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # UPDATE (present) — merge one or more settings into the configuration
+    # -------------------------------------------------------------------------
+
+    - name: Apply audit and condition server settings
+      cortex.xsoar8.server_settings:
+        provider: "{{ xsoar_provider }}"
+        server_settings:
+          audit.log.playground.user.commands: true
+          condition.ask.external.link: "enabled"
+          incident.closingcooldown: 60
+        state: present
+      register: update_result
+      tags:
+        - update
+
+    - name: Configure e-mail notification settings
+      cortex.xsoar8.server_settings:
+        provider: "{{ xsoar_provider }}"
+        server_settings:
+          notifications.email.from: "xsoar-alerts@company.com"
+          notifications.email.subject.prefix: "[XSOAR]"
+        state: present
+      register: update_result
+      tags:
+        - update_email
+
+    - name: Display update result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ update_result.changed | default('n/a') }}
+          Message : {{ update_result.msg | default('not run') }}
+          Settings: {{ update_result.server_settings | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - update
+        - update_email
+
+    # -------------------------------------------------------------------------
+    # DELETE (absent) — remove specific keys from the configuration
+    # -------------------------------------------------------------------------
+
+    - name: Remove audit and condition settings
+      cortex.xsoar8.server_settings:
+        provider: "{{ xsoar_provider }}"
+        delete_settings:
+          - audit.log.playground.user.commands
+          - condition.ask.external.link
+          - incident.closingcooldown
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ delete_result.changed }}
+          Message: {{ delete_result.msg }}
+      tags:
+        - delete

@@ -1,0 +1,208 @@
+---
+# Job Management Playbook
+# Demonstrates create/update, gather (all, by name, by query), and delete
+# operations for XSOAR 8 scheduled jobs using the cortex.xsoar8.job module.
+#
+# Supported parameters:
+#   name               — unique job name (required for present/absent)
+#   playbook_id        — ID of the playbook to run (required for present)
+#   cron               — 5-field cron schedule expression (required for present)
+#   active             — whether the job runs on schedule (default: true)
+#   severity           — incident severity: 0/0.5/1/2/3/4 (default: 0)
+#   type               — incident type name (default: "Unclassified")
+#   owner              — XSOAR username assigned as job owner
+#   tags               — list of tags for the job
+#   custom_fields      — dict of additional incident custom fields
+#   start_date         — ISO 8601 start datetime, or "now" (default: now)
+#   end_date           — ISO 8601 end datetime (only when ending_type=date)
+#   ending_type        — when the job stops: "never" or "date" (default: never)
+#   close_previous_run — close previous run before starting new one (default: false)
+#   should_trigger_new — trigger new run even if previous run is still active (default: false)
+#   notify_owner       — notify owner when job runs (default: false)
+#   query              — free-text query for filtering when state=gathered
+#
+# Idempotency note: cron, custom_fields, notify_owner, owner, playbook_id,
+#   severity, should_trigger_new, tags, and type are tracked.
+#   start_date, end_date, ending_type, and close_previous_run are not checked
+#   for changes, but are applied when another tracked field triggers an update.
+#
+# Usage examples:
+#   ansible-playbook playbooks/job_management.yml --tags create
+#   ansible-playbook playbooks/job_management.yml --tags create_advanced
+#   ansible-playbook playbooks/job_management.yml --tags gather
+#   ansible-playbook playbooks/job_management.yml --tags gather_filtered
+#   ansible-playbook playbooks/job_management.yml --tags delete
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Job Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    job_name: "Daily Threat Intel Update"
+    playbook_id: "{{ threat_intel_playbook_id | default('replace-with-playbook-id') }}"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE
+    # -------------------------------------------------------------------------
+
+    - name: Create a daily scheduled job
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ job_name }}"
+        playbook_id: "{{ playbook_id }}"
+        cron: "0 6 * * *"
+        active: true
+        severity: 1
+        owner: "admin"
+        tags:
+          - "threat-intel"
+          - "automation"
+        state: present
+      register: job_result
+      tags:
+        - create
+
+    - name: Display create/update result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ job_result.changed }}
+          Message: {{ job_result.msg }}
+      tags:
+        - create
+
+    - name: Create a weekly job with an end date
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        name: "Weekly Compliance Scan"
+        playbook_id: "{{ playbook_id }}"
+        cron: "0 8 * * 1"
+        active: true
+        severity: 2
+        ending_type: "date"
+        end_date: "2026-12-31T23:59:59Z"
+        tags:
+          - "compliance"
+        state: present
+      register: weekly_job_result
+      tags:
+        - create_advanced
+
+    - name: Create a job with custom incident type and fields
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        name: "Phishing Report Job"
+        playbook_id: "{{ playbook_id }}"
+        cron: "0 */4 * * *"
+        type: "Phishing"
+        severity: 2
+        should_trigger_new: false
+        custom_fields:
+          sourceip: "10.0.0.0/8"
+        state: present
+      register: phishing_job_result
+      tags:
+        - create_advanced
+
+    - name: Display advanced job results
+      ansible.builtin.debug:
+        msg: |
+          Weekly job  — Changed: {{ weekly_job_result.changed }} | {{ weekly_job_result.msg }}
+          Phishing job — Changed: {{ phishing_job_result.changed }} | {{ phishing_job_result.msg }}
+      tags:
+        - create_advanced
+
+    # -------------------------------------------------------------------------
+    # GATHER — all jobs
+    # -------------------------------------------------------------------------
+
+    - name: Gather all jobs
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_jobs
+      tags:
+        - gather
+
+    - name: Display all jobs
+      ansible.builtin.debug:
+        msg: "Found {{ all_jobs.jobs | default([]) | length }} job(s)"
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — single job by name
+    # -------------------------------------------------------------------------
+
+    - name: Gather a specific job by name
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ job_name }}"
+        state: gathered
+      register: job_info
+      tags:
+        - gather
+
+    - name: Display specific job details
+      ansible.builtin.debug:
+        msg: |
+          Name    : {{ job_info.job.name }}
+          ID      : {{ job_info.job.id }}
+          Active  : {{ job_info.job.CustomFields.isactive | default('unknown') }}
+      when: job_info.job is defined
+      tags:
+        - gather
+
+    - name: Display gather result when job is missing
+      ansible.builtin.debug:
+        msg: "{{ job_info.msg | default('Job details not available') }}"
+      when: job_info.job is not defined
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — by query
+    # -------------------------------------------------------------------------
+
+    - name: Gather jobs matching a tag query
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        query: "tags:threat-intel"
+        state: gathered
+      register: filtered_jobs
+      tags:
+        - gather_filtered
+
+    - name: Display filtered jobs
+      ansible.builtin.debug:
+        msg: "Jobs matching query: {{ filtered_jobs.jobs | default([]) | length }} found"
+      tags:
+        - gather_filtered
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    - name: Delete a job by name
+      cortex.xsoar8.job:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ job_name }}"
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: "{{ delete_result.msg }}"
+      tags:
+        - delete

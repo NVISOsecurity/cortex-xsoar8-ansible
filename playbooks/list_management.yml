@@ -1,0 +1,190 @@
+---
+# List Management Playbook
+# Demonstrates create/update, gather (all and by name), and delete
+# operations for XSOAR 8 list objects using the cortex.xsoar8.list module.
+#
+# Supported parameters:
+#   name               — unique list name (required for present/absent)
+#   content            — plain text/HTML/Markdown/CSS content (mutually exclusive with json_content)
+#   json_content       — structured JSON content as an object or list (mutually exclusive with content)
+#   content_type       — one of: Text, HTML, Markdown, CSS, JSON (default: Text)
+#   description        — human-readable description of the list
+#   propagation_labels — labels for multi-tenant propagation (default: ["all"])
+#   read_roles         — roles with read-only access (omit for unrestricted read)
+#   edit_roles         — roles with read-write access (omit for unrestricted write)
+#
+# Notes:
+#   - content and json_content are mutually exclusive.
+#   - When content_type is JSON, json_content must be used instead of content.
+#   - json_content can be either a JSON object or a JSON list.
+#   - Setting read_roles restricts read access to those roles only.
+#   - Setting edit_roles restricts write access to those roles only.
+#
+# Usage examples:
+#   ansible-playbook playbooks/list_management.yml --tags create_text
+#   ansible-playbook playbooks/list_management.yml --tags create_json
+#   ansible-playbook playbooks/list_management.yml --tags gather
+#   ansible-playbook playbooks/list_management.yml --tags delete
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR List Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — text list
+    # -------------------------------------------------------------------------
+
+    - name: Create a plain text list of blocked IPs
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        name: "blocked_ips"
+        content: |
+          192.168.1.100
+          10.0.0.50
+          172.16.0.1
+        content_type: "Text"
+        description: "List of blocked IP addresses"
+        state: present
+      register: text_list_result
+      tags:
+        - create_text
+
+    - name: Display text list result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ text_list_result.changed }}
+          Message: {{ text_list_result.msg }}
+      tags:
+        - create_text
+
+    - name: Create a text list with role-based access restrictions
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        name: "sensitive_domains"
+        content: "internal.company.com"
+        content_type: "Text"
+        description: "Internal sensitive domains — restricted access"
+        read_roles:
+          - "Analyst"
+          - "Administrator"
+        edit_roles:
+          - "Administrator"
+        propagation_labels:
+          - "all"
+        state: present
+      register: restricted_list_result
+      tags:
+        - create_text
+
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — JSON list
+    # -------------------------------------------------------------------------
+
+    - name: Create a JSON list
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        name: "threat_actors"
+        content_type: "JSON"
+        json_content:
+          actors:
+            - name: "Actor1"
+              ttps:
+                - "phishing"
+                - "malwares"
+            - name: "Actor2"
+              ttps:
+                - "ransomware"
+        description: "Known threat actor information"
+        edit_roles:
+          - "Analyst"
+        state: present
+      register: json_list_result
+      tags:
+        - create_json
+
+    - name: Display JSON list result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ json_list_result.changed }}
+          Message: {{ json_list_result.msg }}
+      tags:
+        - create_json
+
+    # -------------------------------------------------------------------------
+    # GATHER — all lists
+    # -------------------------------------------------------------------------
+
+    - name: Gather all lists
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_lists
+      tags:
+        - gather
+
+    - name: Display all lists
+      ansible.builtin.debug:
+        msg: "Found {{ all_lists.lists | default([]) | length }} list(s)"
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — single list by name
+    # -------------------------------------------------------------------------
+
+    - name: Gather a specific list by name
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        name: "blocked_ips"
+        state: gathered
+      register: blocked_ips_info
+      tags:
+        - gather
+
+    - name: Display specific list details
+      ansible.builtin.debug:
+        msg: |
+          Name       : {{ blocked_ips_info.list.name }}
+          ID         : {{ blocked_ips_info.list.id }}
+          Type       : {{ blocked_ips_info.list.type }}
+          Description: {{ blocked_ips_info.list.description }}
+      when: blocked_ips_info.list is defined
+      tags:
+        - gather
+
+    - name: Display gather result when specific list is missing
+      ansible.builtin.debug:
+        msg: "{{ blocked_ips_info.msg | default('List details not available') }}"
+      when: blocked_ips_info.list is not defined
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    - name: Delete a list by name
+      cortex.xsoar8.list:
+        provider: "{{ xsoar_provider }}"
+        name: "blocked_ips"
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: "{{ delete_result.msg }}"
+      tags:
+        - delete

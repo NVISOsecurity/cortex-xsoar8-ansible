@@ -1,0 +1,174 @@
+---
+# Multi-Tenant Management Playbook
+# Demonstrates create, gather, and delete operations for XSOAR 8 multi-tenant
+# (MSSP) child tenants using the cortex.xsoar8.multi_tenant module.
+#
+# Parameters for state=present (all required):
+#   tenant_name       — display name of the new tenant
+#   tenant_subdomain  — subdomain to assign to the tenant
+#   initial_user      — email address of the initial administrator
+#   data_retention    — data retention period in days (positive integer)
+#
+# Parameters for state=absent (at least one identifier required):
+#   cortex_id    — Cortex platform ID of the tenant
+#   tenant_name  — display name of the tenant
+#   tenant_id    — internal XSOAR tenant ID
+#
+#   You may supply only one identifier and the module will look up the rest via
+#   the API automatically.  Alternatively, supply all three to skip the lookup.
+#   If the tenant cannot be found the module returns changed=False (idempotent).
+#
+# Parameters for state=gathered (all optional):
+#   cortex_id    — filter by Cortex platform ID
+#   tenant_name  — filter by display name
+#   tenant_id    — filter by internal XSOAR tenant ID
+#   (none)       — returns all tenants
+#
+# Identifier lookup priority: cortex_id > tenant_name > tenant_id
+#
+# Authentication requirement:
+#   All MSSP/multi-tenant API endpoints require a Global Management API key.
+#   A standard tenant-scoped API key will be rejected with a 403 Forbidden error.
+#   Ensure the api_key and api_key_id in vars/xsoar.yml belong to a Global
+#   Management key created at the MSSP management level.
+#
+# Usage examples:
+#   ansible-playbook playbooks/multi_tenant_management.yml --tags create
+#   ansible-playbook playbooks/multi_tenant_management.yml --tags gather_all
+#   ansible-playbook playbooks/multi_tenant_management.yml --tags gather
+#   ansible-playbook playbooks/multi_tenant_management.yml --tags delete_by_name
+#   ansible-playbook playbooks/multi_tenant_management.yml --tags delete_by_all_ids
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Multi-Tenant Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    tenant_name: "acme-corp"
+    tenant_subdomain: "acme"
+    tenant_initial_user: "admin@acme.com"
+    tenant_data_retention: 365
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE — new child tenant
+    # -------------------------------------------------------------------------
+
+    - name: Create a new child tenant
+      cortex.xsoar8.multi_tenant:
+        provider: "{{ xsoar_provider }}"
+        tenant_name: "{{ tenant_name }}"
+        tenant_subdomain: "{{ tenant_subdomain }}"
+        initial_user: "{{ tenant_initial_user }}"
+        data_retention: "{{ tenant_data_retention }}"
+        state: present
+      register: create_result
+      tags:
+        - create
+
+    - name: Display create result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ create_result.changed }}
+          Message : {{ create_result.msg }}
+          Tenant  : {{ create_result.tenant | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - create
+
+    # -------------------------------------------------------------------------
+    # GATHER — all tenants
+    # -------------------------------------------------------------------------
+
+    - name: Gather all tenants
+      cortex.xsoar8.multi_tenant:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_tenants_result
+      tags:
+        - gather_all
+
+    - name: Display all tenants
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ all_tenants_result.changed }}
+          Message : {{ all_tenants_result.msg }}
+          Tenants : {{ all_tenants_result.tenants | default([]) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather_all
+
+    # -------------------------------------------------------------------------
+    # GATHER — specific tenant by name
+    # -------------------------------------------------------------------------
+
+    - name: Gather a specific tenant by name
+      cortex.xsoar8.multi_tenant:
+        provider: "{{ xsoar_provider }}"
+        tenant_name: "{{ tenant_name }}"
+        state: gathered
+      register: gather_result
+      tags:
+        - gather
+
+    - name: Display gathered tenant
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ gather_result.changed }}
+          Message : {{ gather_result.msg }}
+          Tenant  : {{ gather_result.tenant | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # DELETE — by name only (module resolves cortex_id and tenant_id via API)
+    # -------------------------------------------------------------------------
+
+    - name: Delete tenant by name (module resolves remaining identifiers)
+      cortex.xsoar8.multi_tenant:
+        provider: "{{ xsoar_provider }}"
+        tenant_name: "{{ tenant_name }}"
+        state: absent
+      register: delete_by_name_result
+      tags:
+        - delete_by_name
+
+    - name: Display delete by name result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ delete_by_name_result.changed }}
+          Message : {{ delete_by_name_result.msg }}
+          Tenant  : {{ delete_by_name_result.tenant | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - delete_by_name
+
+    # -------------------------------------------------------------------------
+    # DELETE — by all three identifiers (skips the API lookup)
+    # -------------------------------------------------------------------------
+
+    - name: Delete tenant by all three identifiers (no lookup required)
+      cortex.xsoar8.multi_tenant:
+        provider: "{{ xsoar_provider }}"
+        cortex_id: "{{ tenant_cortex_id | default('cortex-abc123') }}"
+        tenant_id: "{{ tenant_id | default('tenant-abc123') }}"
+        tenant_name: "{{ tenant_name }}"
+        state: absent
+      register: delete_by_ids_result
+      tags:
+        - delete_by_all_ids
+
+    - name: Display delete by all identifiers result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ delete_by_ids_result.changed }}
+          Message : {{ delete_by_ids_result.msg }}
+          Tenant  : {{ delete_by_ids_result.tenant | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - delete_by_all_ids

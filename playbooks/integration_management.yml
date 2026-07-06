@@ -1,0 +1,141 @@
+---
+# Integration Management Playbook
+# Demonstrates create/update, gather (all and by name), and delete operations
+# for XSOAR 8 integration instances using the cortex.xsoar8.integration module.
+#
+# Supported parameters:
+#   name               — unique instance name (required for present/absent unless instance_id given)
+#   brand              — integration brand/type name (e.g. "VirusTotal (API v3)")
+#   enabled            — whether the instance is enabled (default: true)
+#   configuration      — dict of integration-specific configuration fields
+#   instance_id        — XSOAR internal instance ID (alternative to name for present/absent)
+#   engine             — engine name for on-prem routing
+#   engine_group       — engine group name
+#   incoming_mapper_id — mapper ID for incoming events
+#   propagation_labels — list of propagation labels (default: ["all"])
+#   default_ignore     — whether to ignore this instance by default (default: false)
+#   get_available      — when gathering, also retrieve available (not yet created) integrations
+#
+# Usage examples:
+#   ansible-playbook playbooks/integration_management.yml --tags create
+#   ansible-playbook playbooks/integration_management.yml --tags gather
+#   ansible-playbook playbooks/integration_management.yml --tags delete
+#   For credential-reference integration flows, use:
+#   ansible-playbook playbooks/integration_with_credentials.yml --tags create_azure
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Integration Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    virustotal_api_key: "{{ vt_api_key | default('replace-me') }}"
+    integration_name: "VirusTotal_Automation"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE
+    # -------------------------------------------------------------------------
+
+    - name: Create a VirusTotal integration instance
+      cortex.xsoar8.integration:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ integration_name }}"
+        brand: "VirusTotal (API v3)"
+        enabled: true
+        configuration:
+          credentials:
+            password: "{{ virustotal_api_key }}"
+          feedReliability: "B - Usually reliable"
+          proxy: false
+          insecure: false
+        state: present
+      register: vt_integration
+      tags:
+        - create
+
+    - name: Display integration create/update result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ vt_integration.changed }}
+          Name   : {{ vt_integration.integration.name }}
+          ID     : {{ vt_integration.integration.id }}
+          Enabled: {{ vt_integration.integration.enabled }}
+      tags:
+        - create
+
+    # -------------------------------------------------------------------------
+    # GATHER — all instances
+    # -------------------------------------------------------------------------
+
+    - name: Gather all integration instances
+      cortex.xsoar8.integration:
+        provider: "{{ xsoar_provider }}"
+        state: gathered
+      register: all_integrations
+      tags:
+        - gather
+
+    - name: Display all integration instances
+      ansible.builtin.debug:
+        msg: "Found {{ all_integrations.integrations | default([]) | length }} integration instance(s)"
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER — single instance by name
+    # -------------------------------------------------------------------------
+
+    - name: Gather a specific integration instance by name
+      cortex.xsoar8.integration:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ integration_name }}"
+        state: gathered
+      register: vt_info
+      tags:
+        - gather
+
+    - name: Display specific integration details
+      ansible.builtin.debug:
+        msg: |
+          Name   : {{ vt_info.integration.name }}
+          ID     : {{ vt_info.integration.id }}
+          Brand  : {{ vt_info.integration.brand }}
+          Enabled: {{ vt_info.integration.enabled }}
+      when: vt_info.integration is defined
+      tags:
+        - gather
+
+    - name: Display gather result when integration is missing
+      ansible.builtin.debug:
+        msg: "{{ vt_info.msg | default('Integration details not available') }}"
+      when: vt_info.integration is not defined
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    - name: Delete an integration instance by name
+      cortex.xsoar8.integration:
+        provider: "{{ xsoar_provider }}"
+        name: "{{ integration_name }}"
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: "{{ delete_result.msg }}"
+      tags:
+        - delete

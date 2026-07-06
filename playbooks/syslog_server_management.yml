@@ -1,0 +1,193 @@
+---
+# Syslog Server Management Playbook
+# Demonstrates create/update, gather (by name, by status), and delete
+# operations for XSOAR 8 syslog server integrations using the
+# cortex.xsoar8.syslog_server module.
+#
+# Supported request_data fields (state=present):
+#   name          — unique syslog server name (required)
+#   address       — publicly routable IP or hostname (required; RFC 1918 addresses are rejected)
+#   port          — destination port as string, e.g. "514" (required)
+#   protocol      — TCP | UDP | TLS (required)
+#   facility      — syslog facility code, e.g. FAC_LOCAL0 (required)
+#   syslog_id     — unique server ID; optional, looked up by name when omitted
+#   security_info — TLS security config (used only when protocol=TLS)
+#     certificate_name    — cert name stored in XSOAR; recommended for normal TLS validation
+#     ignore_cert_errors  — required bool for TLS; true bypasses certificate validation (not recommended for production)
+#     certificate_content — raw PEM content (TLS create/update only; excluded from idempotency)
+#
+# Supported request_data fields (state=absent / state=gathered):
+#   filters — list of filter objects (at least one required by the API)
+#     field    — address | id | name | status
+#     operator — eq
+#     value    — value to match; for the "status" field accepted values are ACTIVE or ERROR
+#
+# Notes on naming:
+#   XSOAR allows two syslog servers to share the same name when one was created
+#   manually via the UI and the other via the API (they receive different IDs).
+#   A name-based delete (state=absent with a name filter) will therefore delete
+#   ALL servers with that name — both the manually created and the API-created
+#   instance — if both exist.
+#
+# Idempotency note: name, address, port, protocol, and facility are compared.
+#   For TLS servers, security_info (excluding certificate_content) is also compared.
+#   certificate_content is excluded from idempotency checks to avoid unnecessary
+#   updates when the certificate content is not known at gather time.
+#
+# Usage examples:
+#   ansible-playbook playbooks/syslog_server_management.yml --tags create
+#   ansible-playbook playbooks/syslog_server_management.yml --tags create_tls
+#   ansible-playbook playbooks/syslog_server_management.yml --tags gather
+#   ansible-playbook playbooks/syslog_server_management.yml --tags gather_filtered
+#   ansible-playbook playbooks/syslog_server_management.yml --tags delete
+#
+# Adding --check runs in check mode (shows changes without applying them).
+
+- name: XSOAR Syslog Server Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    syslog_name: "prod_syslog"
+    syslog_address: "{{ syslog_dest_ip | default('1.1.1.1') }}"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — UDP syslog server
+    # -------------------------------------------------------------------------
+
+    - name: Create a UDP syslog server
+      cortex.xsoar8.syslog_server:
+        provider: "{{ xsoar_provider }}"
+        request_data:
+          name: "{{ syslog_name }}"
+          address: "{{ syslog_address }}"
+          port: "514"
+          protocol: "UDP"
+          facility: "FAC_LOCAL0"
+        state: present
+      register: create_result
+      tags:
+        - create
+
+    - name: Display create result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ create_result.changed }}
+          Message : {{ create_result.msg }}
+          Server  : {{ create_result.syslog_server | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - create
+
+    # -------------------------------------------------------------------------
+    # CREATE / UPDATE — TLS syslog server
+    # -------------------------------------------------------------------------
+
+    - name: Create a TLS syslog server with certificate
+      cortex.xsoar8.syslog_server:
+        provider: "{{ xsoar_provider }}"
+        request_data:
+          name: "secure_syslog"
+          address: "{{ syslog_tls_address | default('1.1.1.1') }}"
+          port: "6514"
+          protocol: "TLS"
+          facility: "FAC_LOCAL1"
+          security_info:
+            certificate_name: "{{ tls_cert_name | default('syslog-tls-cert') }}"
+            ignore_cert_errors: false
+        state: present
+      register: create_result
+      tags:
+        - create_tls
+
+    - name: Display TLS create result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ create_result.changed }}
+          Message : {{ create_result.msg }}
+          Server  : {{ create_result.syslog_server | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - create_tls
+
+    # -------------------------------------------------------------------------
+    # GATHER — by name and by status
+    # -------------------------------------------------------------------------
+
+    - name: Gather syslog server by name
+      cortex.xsoar8.syslog_server:
+        provider: "{{ xsoar_provider }}"
+        request_data:
+          filters:
+            - field: name
+              operator: eq
+              value: "{{ syslog_name }}"
+        state: gathered
+      register: gather_result
+      tags:
+        - gather
+
+    - name: Display gathered servers
+      ansible.builtin.debug:
+        msg: |
+          Found {{ gather_result.syslog_servers | default([]) | length }} server(s):
+          {{ gather_result.syslog_servers | default([]) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather
+
+    # -------------------------------------------------------------------------
+    # GATHER (filtered) — servers in error state
+    # status filter accepts: ACTIVE or ERROR
+    # -------------------------------------------------------------------------
+
+    - name: Gather syslog servers in error state
+      cortex.xsoar8.syslog_server:
+        provider: "{{ xsoar_provider }}"
+        request_data:
+          filters:
+            - field: status
+              operator: eq
+              value: "ERROR"
+        state: gathered
+      register: gather_result
+      tags:
+        - gather_filtered
+
+    - name: Display servers with errors
+      ansible.builtin.debug:
+        msg: |
+          Servers in error state ({{ gather_result.syslog_servers | default([]) | length }}):
+          {{ gather_result.syslog_servers | default([]) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather_filtered
+
+    # -------------------------------------------------------------------------
+    # DELETE — by name filter
+    # -------------------------------------------------------------------------
+
+    - name: Delete syslog server by name
+      cortex.xsoar8.syslog_server:
+        provider: "{{ xsoar_provider }}"
+        request_data:
+          filters:
+            - field: name
+              operator: eq
+              value: "{{ syslog_name }}"
+        state: absent
+      register: delete_result
+      tags:
+        - delete
+
+    - name: Display delete result
+      ansible.builtin.debug:
+        msg: |
+          Changed: {{ delete_result.changed }}
+          Message: {{ delete_result.msg }}
+      tags:
+        - delete

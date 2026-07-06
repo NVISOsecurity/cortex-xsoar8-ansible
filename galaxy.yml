@@ -1,0 +1,44 @@
+---
+namespace: cortex
+name: xsoar8
+version: 1.0.0
+readme: README.md
+authors:
+  - NVISO (@NVISOSecurity)
+description: >-
+  Ansible collection that automates the configuration and operational tasks on
+  Palo Alto Networks Cortex XSOAR 8 SaaS platform using the REST API.
+license:
+  - Apache-2.0
+license_file: LICENSE
+tags:
+  - security
+  - automation
+  - orchestration
+  - xsoar
+  - cortex
+  - paloalto
+  - siem
+  - soar
+  - incident_response
+  - threat_intelligence
+  - saas
+dependencies: {}
+repository: https://nviso-eu.ghe.com/NVISO-EU/cortex-xsoar8-ansible
+documentation: https://pan.dev/ansible/docs/cortex-xsoar-saas
+homepage: https://nviso.eu
+issues: https://nviso-eu.ghe.com/NVISO-EU/cortex-xsoar8-ansible/issues
+build_ignore:
+  - .gitignore
+  - .github/
+  - .vscode/
+  - docs/build/
+  - "*.pyc"
+  - "*.pyo"
+  - __pycache__/
+  - .pytest_cache/
+  - .coverage
+  - htmlcov/
+  - "*.log"
+  - .DS_Store
+  - Thumbs.db

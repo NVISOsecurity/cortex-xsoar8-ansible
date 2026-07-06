@@ -1,0 +1,47 @@
+ancestor: null
+releases:
+  1.0.0:
+    changes:
+      release_summary: 'Initial release of the Cortex XSOAR 8 SaaS Ansible collection.
+
+        Provides modules for managing API keys, credentials, integration instances,
+
+        jobs, lists, multi-tenant accounts, pre-process rules, server settings,
+
+        and syslog server integrations via the Cortex XSOAR 8 REST API.
+
+        '
+    fragments:
+      - v1.0.0-initial-release.yaml
+    modules:
+      - description: Manage XSOAR 8 API keys.
+        name: api_key
+        namespace: ''
+      - description: Manage XSOAR 8 SaaS credential objects.
+        name: credential
+        namespace: ''
+      - description: Manage XSOAR 8 SaaS integration instances.
+        name: integration
+        namespace: ''
+      - description: Manage XSOAR 8 scheduled jobs.
+        name: job
+        namespace: ''
+      - description: Manage XSOAR 8 list objects.
+        name: list
+        namespace: ''
+      - description: Manage XSOAR 8 SaaS multi\-tenant child tenants.
+        name: multi_tenant
+        namespace: ''
+      - description: Sync content to XSOAR child tenants.
+        name: multi_tenant_sync_account
+        namespace: ''
+      - description: Manage XSOAR 8 pre\-process rules.
+        name: pre_process_rule
+        namespace: ''
+      - description: Manage XSOAR 8 SaaS global server settings.
+        name: server_settings
+        namespace: ''
+      - description: Manage XSOAR 8 SaaS syslog server integrations.
+        name: syslog_server
+        namespace: ''
+    release_date: '2026-06-24'

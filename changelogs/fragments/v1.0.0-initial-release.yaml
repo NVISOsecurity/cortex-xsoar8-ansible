@@ -1,0 +1,5 @@
+release_summary: |
+  Initial release of the Cortex XSOAR 8 SaaS Ansible collection.
+  Provides modules for managing API keys, credentials, integration instances,
+  jobs, lists, multi-tenant accounts, pre-process rules, server settings,
+  and syslog server integrations via the Cortex XSOAR 8 REST API.

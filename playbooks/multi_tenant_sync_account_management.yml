@@ -1,0 +1,136 @@
+---
+# Multi-Tenant Sync Account Management Playbook
+# Demonstrates sync (present) and preview (gathered) operations for XSOAR 8
+# child-tenant content synchronization using the
+# cortex.xsoar8.multi_tenant_sync_account module.
+#
+# Parameters:
+#   accounts      — explicit child-tenant account names to target
+#   all_accounts  — target all running accounts discovered via API
+#   items         — explicit item names to evaluate/sync
+#   all_items     — evaluate/sync all pending item diffs
+#
+# Mutually exclusive pairs:
+#   all_accounts <-> accounts
+#   all_items    <-> items
+#
+# Usage examples:
+#   ansible-playbook playbooks/multi_tenant_sync_account_management.yml --tags sync_selected
+#   ansible-playbook playbooks/multi_tenant_sync_account_management.yml --tags sync_all
+#   ansible-playbook playbooks/multi_tenant_sync_account_management.yml --tags gather_selected
+#   ansible-playbook playbooks/multi_tenant_sync_account_management.yml --tags gather_all
+#
+# Adding --check runs in check mode and previews sync behavior.
+
+- name: XSOAR Multi-Tenant Sync Account Management
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/xsoar.yml
+  vars:
+    xsoar_provider:
+      server: "{{ server }}"
+      api_key: "{{ api_key }}"
+      api_key_id: "{{ api_key_id }}"
+      # verify_ssl: true
+
+    target_accounts:
+      - "tenant-a"
+      - "tenant-b"
+
+    target_items:
+      - "BlockedIPs"
+      - "AllowedDomains"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # SYNC — selected accounts and selected items
+    # -------------------------------------------------------------------------
+
+    - name: Sync selected items for selected accounts
+      cortex.xsoar8.multi_tenant_sync_account:
+        provider: "{{ xsoar_provider }}"
+        accounts: "{{ target_accounts }}"
+        items: "{{ target_items }}"
+        state: present
+      register: sync_selected_result
+      tags:
+        - sync_selected
+
+    - name: Display selected sync result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ sync_selected_result.changed }}
+          Message : {{ sync_selected_result.msg }}
+          Items   : {{ sync_selected_result.accounts_items_to_sync | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - sync_selected
+
+    # -------------------------------------------------------------------------
+    # SYNC — all running accounts and all pending items
+    # -------------------------------------------------------------------------
+
+    - name: Sync all pending items for all running accounts
+      cortex.xsoar8.multi_tenant_sync_account:
+        provider: "{{ xsoar_provider }}"
+        all_accounts: true
+        all_items: true
+        state: present
+      register: sync_all_result
+      tags:
+        - sync_all
+
+    - name: Display full sync result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ sync_all_result.changed }}
+          Message : {{ sync_all_result.msg }}
+          Items   : {{ sync_all_result.accounts_items_to_sync | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - sync_all
+
+    # -------------------------------------------------------------------------
+    # GATHER — selected accounts and selected items
+    # -------------------------------------------------------------------------
+
+    - name: Gather sync candidates for selected accounts/items
+      cortex.xsoar8.multi_tenant_sync_account:
+        provider: "{{ xsoar_provider }}"
+        accounts: "{{ target_accounts }}"
+        items: "{{ target_items }}"
+        state: gathered
+      register: gather_selected_result
+      tags:
+        - gather_selected
+
+    - name: Display selected gather result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ gather_selected_result.changed }}
+          Message : {{ gather_selected_result.msg }}
+          Items   : {{ gather_selected_result.accounts_items_to_sync | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather_selected
+
+    # -------------------------------------------------------------------------
+    # GATHER — all running accounts and all pending items
+    # -------------------------------------------------------------------------
+
+    - name: Gather sync candidates for all running accounts
+      cortex.xsoar8.multi_tenant_sync_account:
+        provider: "{{ xsoar_provider }}"
+        all_accounts: true
+        all_items: true
+        state: gathered
+      register: gather_all_result
+      tags:
+        - gather_all
+
+    - name: Display full gather result
+      ansible.builtin.debug:
+        msg: |
+          Changed : {{ gather_all_result.changed }}
+          Message : {{ gather_all_result.msg }}
+          Items   : {{ gather_all_result.accounts_items_to_sync | default({}) | to_nice_yaml(indent=2) }}
+      tags:
+        - gather_all
