@@ -61,10 +61,10 @@ Install directly from the GitHub repository:
 
 ```bash
 # Install from main branch
-ansible-galaxy collection install git+nviso-eu@nviso-eu.ghe.com:NVISO-EU/cortex-xsoar8-ansible.git
+ansible-galaxy collection install git+git@github.com:NVISOsecurity/cortex-xsoar8-ansible.git
 
 # Install from specific branch or tag
-ansible-galaxy collection install git+nviso-eu@nviso-eu.ghe.com:NVISO-EU/cortex-xsoar8-ansible.git,v1.0.0
+ansible-galaxy collection install git+git@github.com:NVISOsecurity/cortex-xsoar8-ansible.git,v1.0.0
 ```
 
 ### Using requirements.yml
@@ -76,7 +76,7 @@ Create a `requirements.yml` file for reproducible installations:
 ---
 collections:
   # From GitHub
-  - name: nviso-eu@nviso-eu.ghe.com:NVISO-EU/cortex-xsoar8-ansible.git
+  - name: git@github.com:NVISOsecurity/cortex-xsoar8-ansible.git
     type: git
     version: main
 
