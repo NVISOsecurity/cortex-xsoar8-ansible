@@ -23,8 +23,8 @@ notes:
     - This module requires access to a Cortex XSOAR 8 instance with appropriate API permissions.
     - Uses the /xsoar/public/v1/jobs and /xsoar/public/v1/jobs/search endpoints.
     - Jobs are identified by I(name); only one job per name is expected.
-        - Idempotency is based on I(cron), I(custom_fields), I(notify_owner), I(owner), I(playbook_id), I(severity), I(should_trigger_new), I(tags), and I(type).
-        - Changes to I(start_date), I(end_date), I(ending_type), and I(close_previous_run) are not detected for idempotency, but are applied when any other tracked field triggers an update.
+    - Idempotency is based on I(cron), I(custom_fields), I(notify_owner), I(owner), I(playbook_id), I(severity), I(should_trigger_new), I(tags), and I(type).
+    - Changes to I(start_date), I(end_date), I(ending_type), and I(close_previous_run) are not detected for idempotency, but are applied when any other tracked field triggers an update.
     - All dates are normalized to UTC ISO 8601 format before being sent to the API.
 extends_documentation_fragment:
     - cortex.xsoar8.xsoar.PROVIDER
@@ -55,7 +55,7 @@ options:
         description:
             - Whether to close the incident from the previous job run before starting a new one.
         type: bool
-        default: false
+        default: true
     custom_fields:
         description:
             - Additional custom fields to set on the job's incident.
@@ -107,7 +107,7 @@ options:
         description:
             - Whether to trigger a new job run even if a previous run is still active.
         type: bool
-        default: false
+        default: true
     start_date:
         description:
             - The date and time at which the job starts.
@@ -714,7 +714,7 @@ def main():
     argument_spec.update(
         dict(
             active=dict(type="bool", default=True),
-            close_previous_run=dict(type="bool", default=False),
+            close_previous_run=dict(type="bool", default=True),
             cron=dict(type="str"),
             custom_fields=dict(type="dict", default={}),
             end_date=dict(type="str"),
@@ -725,7 +725,7 @@ def main():
             playbook_id=dict(type="str"),
             query=dict(type="str"),
             severity=dict(type="float", choices=[0, 0.5, 1, 2, 3, 4], default=0),
-            should_trigger_new=dict(type="bool", default=False),
+            should_trigger_new=dict(type="bool", default=True),
             start_date=dict(type="str", default="now"),
             state=dict(type="str", choices=["present", "absent", "gathered"], default="present"),
             tags=dict(type="list", elements="str", default=[]),

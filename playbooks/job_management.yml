@@ -16,8 +16,8 @@
 #   start_date         — ISO 8601 start datetime, or "now" (default: now)
 #   end_date           — ISO 8601 end datetime (only when ending_type=date)
 #   ending_type        — when the job stops: "never" or "date" (default: never)
-#   close_previous_run — close previous run before starting new one (default: false)
-#   should_trigger_new — trigger new run even if previous run is still active (default: false)
+#   close_previous_run — close previous run before starting new one (default: true)
+#   should_trigger_new — trigger new run even if previous run is still active (default: true)
 #   notify_owner       — notify owner when job runs (default: false)
 #   query              — free-text query for filtering when state=gathered
 #

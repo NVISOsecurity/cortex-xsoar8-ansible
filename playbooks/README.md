@@ -122,7 +122,7 @@ Manage XSOAR 8 scheduled jobs (`cortex.xsoar8.job`).
 
 | Tag | Operation |
 |-----|-----------|
-| `create` | Create a daily job with severity, owner, and tags |
+| `create` | Create a daily job with custom fields, severity, owner, and tags |
 | `create_advanced` | Create a weekly job with end date and a job with custom fields/type |
 | `gather` | Gather all jobs and a specific job by name |
 | `gather_filtered` | Gather jobs matching a free-text query |
