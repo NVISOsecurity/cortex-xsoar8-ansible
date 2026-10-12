@@ -9,17 +9,32 @@
 #   enabled             — whether the rule is active (default: true)
 #   script_id           — script ID to run; required when action is "script"
 #   propagation_labels  — labels for multi-tenant propagation (default: [])
+#   filters             - incoming-event conditions grouped under and/or
 #
 # Notes:
 #   - Pre-process rules evaluate incoming events for duplicate detection.
 #   - script_id is required when action is "script".
-#   - Idempotency tracks name, action, enabled, script_id, and propagation_labels.
+#   - Rules are looked up by name; updates compare action, enabled, script_id,
+#     propagation_labels, and incoming-event filters when supplied.
+#   - Groups under filters.and are AND-connected; conditions under each or are OR-connected.
+#   - isSingleValue=true operators (isTrue, isFalse, isEmpty, isNotEmpty) have no right operand.
+#   - Other operators require a nonempty right.value. Operators are validated against API metadata.
+#   - Omitting filters preserves existing filters; filters: {and: []} clears both incoming filter fields.
+#   - Filter examples create disabled rules. Review field names before enabling them;
+#     the Boolean example requires a Boolean field named testing in your instance.
 #
 # Usage examples:
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_drop
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_link
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_drop_update
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags create_script
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_single
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_or
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_and_or
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_boolean
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_empty
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags clear_filters
+#   ansible-playbook playbooks/pre_process_rule_management.yml --tags preserve_filters
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags gather
 #   ansible-playbook playbooks/pre_process_rule_management.yml --tags delete
 #
@@ -119,7 +134,7 @@
     # DISABLE a rule (update enabled flag)
     # -------------------------------------------------------------------------
 
-    - name: Disable a pre-process rule
+    - name: Disable a pre-process rule while preserving its incoming-event filters
       cortex.xsoar8.pre_process_rule:
         provider: "{{ xsoar_provider }}"
         name: "{{ rule_name }}"
@@ -129,6 +144,7 @@
       register: disable_result
       tags:
         - disable
+        - preserve_filters
 
     - name: Display disable result
       ansible.builtin.debug:
@@ -137,6 +153,161 @@
           Message: {{ disable_result.msg }}
       tags:
         - disable
+        - preserve_filters
+
+    # -------------------------------------------------------------------------
+    # FILTER EXAMPLES - use one tag at a time to inspect each grouping
+    # -------------------------------------------------------------------------
+
+    # One condition: sourceBrand == "Microsoft Graph".
+    - name: Create a disabled rule with a single incoming-event filter
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example Single Filter"
+        action: drop
+        enabled: false
+        filters:
+          and:
+            - or:
+                - operator: isEqualString
+                  left:
+                    value: sourceBrand
+                  right:
+                    value: Microsoft Graph
+                  type: sourceBrand
+        state: present
+      register: filter_result
+      tags:
+        - filter_single
+
+    # A OR B: both alternatives are in the same or group.
+    - name: Create a disabled rule matching either source brand
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example OR Filters"
+        action: drop
+        enabled: false
+        filters:
+          and:
+            - or:
+                - operator: isEqualString
+                  left:
+                    value: sourceBrand
+                  right:
+                    value: Azure Sentinel
+                  type: sourceBrand
+                - operator: isEqualString
+                  left:
+                    value: sourceBrand
+                  right:
+                    value: Microsoft Graph
+                  type: sourceBrand
+        state: present
+      register: filter_result
+      tags:
+        - filter_or
+
+    # (A OR B) AND C: either source brand, and name == "Suspicious login".
+    - name: Create a disabled rule with mixed AND and OR filters
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example AND OR Filters"
+        action: drop
+        enabled: false
+        filters:
+          and:
+            - or:
+                - operator: isEqualString
+                  left:
+                    value: sourceBrand
+                  right:
+                    value: Azure Sentinel
+                  type: sourceBrand
+                - operator: isEqualString
+                  left:
+                    value: sourceBrand
+                  right:
+                    value: Microsoft Graph
+                  type: sourceBrand
+            - or:
+                - operator: isEqualString
+                  left:
+                    value: name
+                  right:
+                    value: Suspicious login
+                  type: name
+        state: present
+      register: filter_result
+      tags:
+        - filter_and_or
+
+    # Unary Boolean operator: no right is provided; the API receives right: {}.
+    - name: Create a disabled rule requiring the testing field to be true
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example Boolean Filter"
+        action: drop
+        enabled: false
+        filters:
+          and:
+            - or:
+                - operator: isTrue
+                  left:
+                    value: testing
+                  type: testing
+        state: present
+      register: filter_result
+      tags:
+        - filter_boolean
+
+    # Unary non-Boolean operator: isEmpty also accepts an omitted or empty right.
+    - name: Create a disabled rule matching an empty event name
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example Empty Field Filter"
+        action: drop
+        enabled: false
+        filters:
+          and:
+            - or:
+                - operator: isEmpty
+                  left:
+                    value: name
+                  right: {}
+                  type: name
+        state: present
+      register: filter_result
+      tags:
+        - filter_empty
+
+    # Explicit empty and clears filters; omitting filters would preserve them.
+    - name: Clear incoming-event filters from the single-filter example rule
+      cortex.xsoar8.pre_process_rule:
+        provider: "{{ xsoar_provider }}"
+        name: "Example Single Filter"
+        action: drop
+        enabled: false
+        filters:
+          and: []
+        state: present
+      register: filter_result
+      tags:
+        - clear_filters
+
+    - name: Display the filter example result and converted API payload
+      ansible.builtin.debug:
+        msg:
+          changed: "{{ filter_result.changed }}"
+          message: "{{ filter_result.msg }}"
+          newEventFilters: "{{ (filter_result.pre_process_rule | default({}, true)).get('newEventFilters', []) }}"
+          readyNewEventFilters: "{{ (filter_result.pre_process_rule | default({}, true)).get('readyNewEventFilters', []) }}"
+      tags:
+        - filter_single
+        - filter_or
+        - filter_and_or
+        - filter_boolean
+        - filter_empty
+        - clear_filters
 
     # -------------------------------------------------------------------------
     # GATHER — all rules
