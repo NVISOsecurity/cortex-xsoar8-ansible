@@ -16,6 +16,10 @@
 #   - script_id is required when action is "script".
 #   - Rules are looked up by name; updates compare action, enabled, script_id,
 #     propagation_labels, and incoming-event filters when supplied.
+#   - Supplied filters are compared against newEventFilters and readyNewEventFilters;
+#     a mismatch in either field updates the rule and synchronizes both fields.
+#   - API filter metadata validation runs only for state: present; filters do not
+#     affect absent or gathered operations.
 #   - Groups under filters.and are AND-connected; conditions under each or are OR-connected.
 #   - isSingleValue=true operators (isTrue, isFalse, isEmpty, isNotEmpty) have no right operand.
 #   - Other operators require a nonempty right.value. Operators are validated against API metadata.
@@ -160,7 +164,7 @@
     # -------------------------------------------------------------------------
 
     # One condition: sourceBrand == "Microsoft Graph".
-    - name: Create a disabled rule with a single incoming-event filter
+    - name: Create or reconcile a disabled rule with a single incoming-event filter
       cortex.xsoar8.pre_process_rule:
         provider: "{{ xsoar_provider }}"
         name: "Example Single Filter"

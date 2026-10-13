@@ -23,9 +23,10 @@ notes:
     - Check mode is supported.
     - This module requires access to a Cortex XSOAR 8 instance with appropriate API permissions.
     - Uses the /xsoar/preprocess/rules, /xsoar/preprocess/rule, and /xsoar/preprocess/filters endpoints.
-    - Nonempty filters require operator metadata from the API, including in check mode.
+    - Nonempty filters for C(state=present) require operator metadata from the API, including in check mode.
     - Filters are validated before payload conversion; invalid conditions fail the task.
     - The API is expected to supply a Boolean C(isSingleValue) flag for each operator.
+    - Supplied filters are compared against both incoming-event filter fields; a difference in either field triggers an update that synchronizes both.
     - Clearing incoming-event filters can broaden matches for an enabled rule.
     - I(script_id) is required when I(action) is C(script).
 extends_documentation_fragment:
@@ -56,10 +57,12 @@ options:
     filters:
         description:
             - Filters for incoming events, sent as C(newEventFilters) and C(readyNewEventFilters).
+            - Used only when I(state) is C(present); it does not affect C(absent) or C(gathered) operations.
             - All groups under C(and) must match; at least one condition under each C(or) must match.
             - A single group can contain one condition or multiple OR-connected conditions.
             - The C(and) and C(or) keys are converted to nested lists and are not sent as payload keys.
             - 'Omit to preserve existing filters on update. Use C({and: []}) to clear them.'
+            - When supplied on update, both incoming-event filter fields must match or the rule is updated to synchronize them.
             - New rules without this option are created with empty incoming-event filters.
             - Existing-event filters are preserved on update and cannot be configured with this option.
         type: dict
@@ -136,7 +139,7 @@ options:
 """
 
 EXAMPLES = """
-- name: Create a pre-process rule that drops duplicate events
+- name: Create or reconcile a pre-process rule that drops duplicate events
   cortex.xsoar8.pre_process_rule:
     provider:
       server: https://api-company.crtx.de.paloaltonetworks.com
@@ -364,10 +367,13 @@ class XSOARPreProcessRuleManager:
             ("scriptID", self.script_id),
         ]
         self.rule_filters = []
-        if self.filters is not None:
+        if self.state == "present" and self.filters is not None:
             self.validate_filters()
             self.rule_filters = self.build_filters()
-            self.fields_to_compare.append(("newEventFilters", self.rule_filters))
+            self.fields_to_compare.extend((
+                 ("newEventFilters", self.rule_filters),
+                 ("readyNewEventFilters", self.rule_filters),
+             ))
 
     def validate_filters(self):
         """Validate supplied filters against API metadata, failing on invalid conditions."""
@@ -385,7 +391,8 @@ class XSOARPreProcessRuleManager:
                 if operator_name not in operator_definitions:
                     self.module.fail_json(msg=f"{condition_path}.operator: unknown operator '{operator_name}'.")
                 operator_metadata = operator_definitions[operator_name]
-                if not isinstance(operator_metadata, dict):
+                # Metadata must be a dict with a Boolean isSingleValue flag, otherwise the unary/binary check below is unreliable.
+                if not isinstance(operator_metadata, dict) or not isinstance(operator_metadata.get("isSingleValue"), bool):
                     self.module.fail_json(msg=f"{condition_path}.operator: invalid metadata for '{operator_name}'.")
                 right_value = (condition.get("right") or {}).get("value")
                 if operator_metadata["isSingleValue"]:

@@ -231,8 +231,10 @@ filters:
 ```
 
 - Operator names are validated against the API's operator metadata, including in check mode.
+- API filter metadata validation occurs only for `state: present`; `filters` does not affect `absent` or `gathered` operations.
 - Operators with `isSingleValue: true`, such as `isTrue`, `isFalse`, `isEmpty`, and `isNotEmpty`, accept an omitted `right` or `right: {}`. Supplying a right value fails validation.
 - Operators with `isSingleValue: false` require a nonempty `right.value`.
+- When `filters` is supplied, the module compares both `newEventFilters` and `readyNewEventFilters`. A mismatch in either field triggers an update that writes the same converted filters to both fields.
 - On update, omitting `filters` preserves existing incoming-event filters. Supplying `filters: {and: []}` clears both `newEventFilters` and `readyNewEventFilters`.
 - New rules without `filters` have empty incoming-event filters. Existing-event filters cannot be configured through this option.
 

@@ -39,7 +39,7 @@ def make_job_params(provider_params, **overrides):
     params = {
         "provider": provider_params,
         "active": True,
-        "close_previous_run": False,
+        "close_previous_run": True,
         "cron": "0 6 * * *",
         "custom_fields": {},
         "end_date": None,
@@ -50,7 +50,7 @@ def make_job_params(provider_params, **overrides):
         "playbook_id": "test-playbook",
         "query": None,
         "severity": 0,
-        "should_trigger_new": False,
+        "should_trigger_new": True,
         "start_date": "now",
         "state": "present",
         "tags": [],

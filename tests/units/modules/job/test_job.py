@@ -141,8 +141,8 @@ class TestBuildJobData:
         assert payload["cron"] == "0 6 * * *"
         assert payload["playbookId"] == "test-playbook"
         assert payload["type"] == "Unclassified"
-        assert not payload["closePrevRun"]
-        assert not payload["shouldTriggerNew"]
+        assert payload["closePrevRun"] is True
+        assert payload["shouldTriggerNew"] is True
         assert not payload["notifyOwner"]
         assert payload["owner"] == ""
         assert payload["severity"] == 0

@@ -286,20 +286,24 @@ class TestRuleFilters:
             make_pre_process_rule_manager(filters={"and": [{"or": []}]})
 
     @pytest.mark.parametrize("check_mode", [False, True])
-    @pytest.mark.parametrize("same_filters", [False, True])
+    @pytest.mark.parametrize("new_filters_match", [False, True])
+    @pytest.mark.parametrize("ready_filters_match", [False, True])
     def test_ensure_present_compares_filters(
-        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions, check_mode, same_filters
+        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions, check_mode,
+        new_filters_match, ready_filters_match,
     ):
         manager = make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
         manager.module.check_mode = check_mode
-        api_pre_process_rule_response["newEventFilters"] = manager.rule_filters if same_filters else []
+        api_pre_process_rule_response["newEventFilters"] = manager.rule_filters if new_filters_match else []
+        api_pre_process_rule_response["readyNewEventFilters"] = manager.rule_filters if ready_filters_match else []
         manager.connection.request.return_value = [api_pre_process_rule_response]
 
         result = ensure_present(manager.module, manager)
 
-        assert result["changed"] is (not same_filters)
+        filters_match = new_filters_match and ready_filters_match
+        assert result["changed"] is (not filters_match)
         post_calls = [call for call in manager.connection.request.call_args_list if call.args[0] == "POST"]
-        assert len(post_calls) == (0 if same_filters or check_mode else 1)
+        assert len(post_calls) == (0 if filters_match or check_mode else 1)
         if post_calls:
             assert post_calls[0].kwargs["data"]["newEventFilters"] == manager.rule_filters
             assert post_calls[0].kwargs["data"]["readyNewEventFilters"] == manager.rule_filters
