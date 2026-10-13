@@ -413,6 +413,8 @@ class XSOARJobManager:
         if raw_job_data:
             raw_job_data = copy.deepcopy(raw_job_data)
             raw_job_data["version"] = -1
+            for field in ("nextRunTime", "displayNextRunTime", "disabledNextRunTime"):
+                raw_job_data.pop(field, None)
             custom_fields = raw_job_data.get("CustomFields")
             if not isinstance(custom_fields, dict):
                 custom_fields = {}
