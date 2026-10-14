@@ -12,7 +12,7 @@ description:
     - Create, update, delete, and gather information about pre-process rules in Cortex XSOAR 8.
     - Pre-process rules evaluate incoming events and determine how to handle duplicates
       of existing open incidents.
-    - Rules can close, drop, link, or run a script against duplicate events.
+    - Rules can close, drop, update, link, or run a script against duplicate events.
     - Uses the XSOAR 8 REST API for all operations.
 version_added: "1.0.0"
 author:
@@ -22,7 +22,12 @@ requirements:
 notes:
     - Check mode is supported.
     - This module requires access to a Cortex XSOAR 8 instance with appropriate API permissions.
-    - Uses the /xsoar/preprocess/rules and /xsoar/preprocess/rule endpoints.
+    - Uses the /xsoar/preprocess/rules, /xsoar/preprocess/rule, and /xsoar/preprocess/filters endpoints.
+    - Nonempty filters for C(state=present) require operator metadata from the API, including in check mode.
+    - Filters are validated before payload conversion; invalid conditions fail the task.
+    - The API is expected to supply a Boolean C(isSingleValue) flag for each operator.
+    - Supplied filters are compared against both incoming-event filter fields; a difference in either field triggers an update that synchronizes both.
+    - Clearing incoming-event filters can broaden matches for an enabled rule.
     - I(script_id) is required when I(action) is C(script).
 extends_documentation_fragment:
     - cortex.xsoar8.xsoar.PROVIDER
@@ -49,6 +54,68 @@ options:
             - Whether the pre-process rule is active.
         type: bool
         default: true
+    filters:
+        description:
+            - Filters for incoming events, sent as C(newEventFilters) and C(readyNewEventFilters).
+            - Used only when I(state) is C(present); it does not affect C(absent) or C(gathered) operations.
+            - All groups under C(and) must match; at least one condition under each C(or) must match.
+            - A single group can contain one condition or multiple OR-connected conditions.
+            - The C(and) and C(or) keys are converted to nested lists and are not sent as payload keys.
+            - 'Omit to preserve existing filters on update. Use C({and: []}) to clear them.'
+            - When supplied on update, both incoming-event filter fields must match or the rule is updated to synchronize them.
+            - New rules without this option are created with empty incoming-event filters.
+            - Existing-event filters are preserved on update and cannot be configured with this option.
+        type: dict
+        suboptions:
+            and:
+                description:
+                    - Groups joined by logical AND.
+                type: list
+                elements: dict
+                required: true
+                suboptions:
+                    or:
+                        description:
+                            - Conditions joined by logical OR. Each group must contain at least one condition.
+                        type: list
+                        elements: dict
+                        required: true
+                        suboptions:
+                            operator:
+                                description:
+                                    - XSOAR comparison operator, such as C(isEqualString) or C(isNotEqualString).
+                                    - Must match a key in the operator metadata returned by the API.
+                                type: str
+                                required: true
+                            left:
+                                description:
+                                    - Left operand.
+                                type: dict
+                                required: true
+                                suboptions:
+                                    value:
+                                        description:
+                                            - Event field name, wrapped as C(value.simple) with C(isContext=true) in the API payload.
+                                        type: str
+                                        required: true
+                            right:
+                                description:
+                                    - Right operand, required when the operator API metadata has C(isSingleValue=false).
+                                    - Operand requirements depend on C(isSingleValue), not the operator data type.
+                                    - Omit or use an empty dict for unary operators with C(isSingleValue=true); nonempty values are rejected.
+                                    - Unary operators, including C(isTrue), C(isFalse), C(isEmpty), and C(isNotEmpty), are sent with an empty C(right) object.
+                                type: dict
+                                suboptions:
+                                    value:
+                                        description:
+                                            - Literal comparison value, wrapped as C(value.simple) with C(isContext=false) in the API payload.
+                                            - Required and must not be empty for operators with C(isSingleValue=false).
+                                        type: str
+                            type:
+                                description:
+                                    - XSOAR filter type, such as C(sourceBrand).
+                                type: str
+                                required: true
     script_id:
         description:
             - The ID of the script to run when I(action) is C(script).
@@ -58,6 +125,7 @@ options:
         description:
             - Labels used for rule propagation in multi-tenant environments.
         type: list
+        elements: str
         default: []
     state:
         description:
@@ -71,77 +139,121 @@ options:
 """
 
 EXAMPLES = """
-- name: Create a pre-process rule that drops duplicate events
+- name: Create or reconcile a pre-process rule that drops duplicate events
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Drop Duplicate Phishing Alerts"
-    action: "drop"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Duplicate Phishing Alerts
+    action: drop
     enabled: true
+    filters:
+      and:
+      - or:
+        - operator: isEqualString
+          left:
+            value: sourceBrand
+          right:
+            value: Azure Sentinel
+          type: sourceBrand
+        - operator: isEqualString
+          left:
+            value: sourceBrand
+          right:
+            value: Microsoft Graph
+          type: sourceBrand
+      - or:
+        - operator: isEqualString
+          left:
+            value: name
+          right:
+            value: Suspicious login
+          type: name
     state: present
-
+- name: Create a rule for an incoming Boolean field
+  cortex.xsoar8.pre_process_rule:
+    provider:
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Testing Events
+    action: drop
+    filters:
+      and:
+      - or:
+        - operator: isTrue
+          left:
+            value: testing
+          type: testing
+    state: present
+- name: Remove all incoming-event filters from an existing rule
+  cortex.xsoar8.pre_process_rule:
+    provider:
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Testing Events
+    action: drop
+    enabled: false
+    filters:
+      and: []
+    state: present
 - name: Create a pre-process rule that links duplicate events
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Link Related Malware Incidents"
-    action: "link"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Link Related Malware Incidents
+    action: link
     enabled: true
     state: present
-
 - name: Create a pre-process rule that runs a script
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Custom Dedup Script Rule"
-    action: "script"
-    script_id: "DedupScript"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Custom Dedup Script Rule
+    action: script
+    script_id: DedupScript
     enabled: true
     state: present
-
 - name: Disable a pre-process rule
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Drop Duplicate Phishing Alerts"
-    action: "drop"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Duplicate Phishing Alerts
+    action: drop
     enabled: false
     state: present
-
 - name: Gather all pre-process rules
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
     state: gathered
   register: all_rules
-
 - name: Get a specific pre-process rule by name
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Drop Duplicate Phishing Alerts"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Duplicate Phishing Alerts
     state: gathered
   register: rule_info
-
 - name: Delete a pre-process rule
   cortex.xsoar8.pre_process_rule:
     provider:
-      server: "https://api-company.crtx.de.paloaltonetworks.com"
-      api_key: "your-api-key"
-      api_key_id: "your-api-key-id"
-    name: "Drop Duplicate Phishing Alerts"
+      server: https://api-company.crtx.de.paloaltonetworks.com
+      api_key: your-api-key
+      api_key_id: your-api-key-id
+    name: Drop Duplicate Phishing Alerts
     state: absent
 """
 
@@ -155,9 +267,8 @@ pre_process_rule:
     description: Information about the pre-process rule.
     returned: when state is present, when state is absent and the rule existed,
               or when state is gathered and a matching rule is found by name.
-              May be omitted for state is present if the API operation succeeds
-              but response payload does not contain a matching object and
-              follow-up read does not find the rule.
+              May be null after creation or update if the API response does not
+              contain a list with a matching rule.
     type: dict
     contains:
         id:
@@ -183,6 +294,17 @@ pre_process_rule:
         propagationLabels:
             description: Propagation labels for multi-tenant environments.
             type: list
+            elements: str
+            sample: []
+        newEventFilters:
+            description: Incoming-event conditions as lists of OR-connected conditions joined by AND.
+            type: list
+            elements: list
+            sample: []
+        readyNewEventFilters:
+            description: Prepared incoming-event filters sent with the same content as C(newEventFilters).
+            type: list
+            elements: list
             sample: []
 pre_process_rules:
     description: All pre-process rules.
@@ -232,6 +354,7 @@ class XSOARPreProcessRuleManager:
 
         self.action = connection.module.params["action"]
         self.enabled = connection.module.params["enabled"]
+        self.filters = connection.module.params.get("filters")
         self.name = connection.module.params["name"]
         self.propagation_labels = connection.module.params["propagation_labels"]
         self.script_id = connection.module.params["script_id"]
@@ -243,6 +366,59 @@ class XSOARPreProcessRuleManager:
             ("propagationLabels", self.propagation_labels),
             ("scriptID", self.script_id),
         ]
+        self.rule_filters = []
+        if self.state == "present" and self.filters is not None:
+            self.validate_filters()
+            self.rule_filters = self.build_filters()
+            self.fields_to_compare.extend((
+                 ("newEventFilters", self.rule_filters),
+                 ("readyNewEventFilters", self.rule_filters),
+             ))
+
+    def validate_filters(self):
+        """Validate supplied filters against API metadata, failing on invalid conditions."""
+        if not self.filters["and"]:
+            return
+        operator_definitions = self.get_rule_filters()
+        if not isinstance(operator_definitions, dict) or not operator_definitions:
+            self.module.fail_json(msg="Cannot validate filters: operator metadata is unavailable.")
+        for group_index, filter_group in enumerate(self.filters["and"]):
+            if not filter_group["or"]:
+                self.module.fail_json(msg="Each filters.and group must contain at least one condition in or.")
+            for condition_index, condition in enumerate(filter_group["or"]):
+                condition_path = f"filters.and[{group_index}].or[{condition_index}]"
+                operator_name = condition["operator"]
+                if operator_name not in operator_definitions:
+                    self.module.fail_json(msg=f"{condition_path}.operator: unknown operator '{operator_name}'.")
+                operator_metadata = operator_definitions[operator_name]
+                # Metadata must be a dict with a Boolean isSingleValue flag, otherwise the unary/binary check below is unreliable.
+                if not isinstance(operator_metadata, dict) or not isinstance(operator_metadata.get("isSingleValue"), bool):
+                    self.module.fail_json(msg=f"{condition_path}.operator: invalid metadata for '{operator_name}'.")
+                right_value = (condition.get("right") or {}).get("value")
+                if operator_metadata["isSingleValue"]:
+                    if right_value is not None:
+                        self.module.fail_json(msg=f"{condition_path}.right: Unary operator '{operator_name}' requires an empty operand.")
+                elif right_value in (None, ""):
+                    self.module.fail_json(msg=f"{condition_path}.right.value is required for operator '{operator_name}'.")
+
+    def build_filters(self):
+        """Convert validated filters to the API payload without fetching metadata."""
+        groups = []
+        for group in self.filters["and"]:
+            conditions = []
+            for condition in group["or"]:
+                right = condition.get("right")
+                right_payload = {}
+                if right and right.get("value") is not None:
+                    right_payload = {"value": {"simple": right["value"]}, "isContext": False}
+                conditions.append({
+                    "operator": condition["operator"],
+                    "left": {"value": {"simple": condition["left"]["value"]}, "isContext": True},
+                    "right": right_payload,
+                    "type": condition["type"],
+                })
+            groups.append(conditions)
+        return groups
 
     def build_rule_data(self, raw_rule_data=None):
         """
@@ -261,6 +437,9 @@ class XSOARPreProcessRuleManager:
             raw_rule_data["propagationLabels"] = self.propagation_labels or []
             raw_rule_data["scriptID"] = self.script_id
             raw_rule_data["version"] = -1
+            if self.filters is not None:
+                raw_rule_data["newEventFilters"] = self.rule_filters
+                raw_rule_data["readyNewEventFilters"] = self.rule_filters
             return raw_rule_data
 
         rule_data = {
@@ -271,7 +450,8 @@ class XSOARPreProcessRuleManager:
             "id": "",
             "linkTo": "oldest",
             "name": self.name,
-            "newEventFilters": [],
+            "newEventFilters": self.rule_filters,
+            "readyNewEventFilters": self.rule_filters,
             "searchClosed": False,
             "period": {"fromValue": 30, "by": "days"},
             "propagationLabels": self.propagation_labels or [],
@@ -282,12 +462,25 @@ class XSOARPreProcessRuleManager:
 
         return rule_data
 
+    def get_rule_filters(self):
+        """
+        Returns the allowed filters to be used in Pre-Process Rules.
+
+        Returns:
+            dict: Allowed filters for Pre-Process Rules, or an empty dict on API failure.
+        """
+        try:
+            return self.connection.request("GET", "/xsoar/preprocess/filters")
+        except XSOARAPIError as e:
+            self.module.log(msg=f"Failed to get pre-process rule filters: {to_text(e)}")
+            return {}
+
     def get_pre_process_rules(self):
         """
         Retrieves Pre-Process Rules.
 
         Returns:
-            list | dict: Pre-Process Rule response from the API.
+            list: Pre-Process Rule response from the API, or an empty list for non-list responses.
         """
         try:
             response = self.connection.request("GET", "/xsoar/preprocess/rules")
@@ -305,10 +498,9 @@ class XSOARPreProcessRuleManager:
         Returns:
             dict | None: Pre-Process Rule data if found, else None.
         """
-        if rules := self.get_pre_process_rules():
-            for _rule in rules:
-                if _rule.get("name") == name:
-                    return _rule
+        for rule in self.get_pre_process_rules():
+            if rule.get("name") == name:
+                return rule
         return None
 
     def create_pre_process_rule(self, rule_data):
@@ -319,7 +511,7 @@ class XSOARPreProcessRuleManager:
             rule_data (dict): Data for the new Pre-Process Rule.
 
         Returns:
-            dict: Created Pre-Process Rule response from the API.
+            dict | None: Matching created rule from the API response, or None if not found.
         """
         try:
             response = self.connection.request("POST", "/xsoar/preprocess/rule", data=rule_data)
@@ -337,7 +529,7 @@ class XSOARPreProcessRuleManager:
             current_rule_data (dict): Current data of the Pre-Process Rule to update.
 
         Returns:
-            dict: Updated Pre-Process Rule response from the API.
+            dict | None: Matching updated rule from the API response, or None if not found.
         """
         try:
             response = self.connection.request(
@@ -360,8 +552,7 @@ class XSOARPreProcessRuleManager:
             dict: Response from the API after deletion.
         """
         try:
-            response = self.connection.request("DELETE", f"/xsoar/preprocess/rule/{rule_id}")
-            return response
+            return self.connection.request("DELETE", f"/xsoar/preprocess/rule/{rule_id}")
         except XSOARAPIError as e:
             self.module.fail_json(msg=f"Failed to delete Pre-Process Rule {rule_id}: {to_text(e)}")
 
@@ -377,8 +568,6 @@ def ensure_present(module, pre_process_rule_manager):
     Returns:
         dict: Result information
     """
-    result = {}
-
     # Check if rule exists
     if current_rule := pre_process_rule_manager.get_pre_process_rule_by_name(name=pre_process_rule_manager.name):
         if module.check_mode:
@@ -441,8 +630,6 @@ def ensure_absent(module, pre_process_rule_manager):
     Returns:
         dict: Result information
     """
-    result = {}
-
     if current_rule := pre_process_rule_manager.get_pre_process_rule_by_name(name=pre_process_rule_manager.name):
         if module.check_mode:
             result = {
@@ -495,11 +682,44 @@ def main():
     """Main function."""
     # Define module arguments
     argument_spec = xsoar_argument_spec()
-    # TODO: Add support for "Conditions for Incoming incident" field
     argument_spec.update(
         dict(
             action=dict(type="str", choices=["close", "drop", "dropAndUpdate", "link", "linkAndClose", "script"]),
             enabled=dict(type="bool", default=True),
+            filters=dict(
+                type="dict",
+                options={
+                    "and": dict(
+                        type="list",
+                        elements="dict",
+                        required=True,
+                        options={
+                            "or": dict(
+                                type="list",
+                                elements="dict",
+                                required=True,
+                                options=dict(
+                                    operator=dict(type="str", required=True),
+                                    left=dict(
+                                        type="dict",
+                                        required=True,
+                                        options=dict(
+                                            value=dict(type="str", required=True),
+                                        ),
+                                    ),
+                                    right=dict(
+                                        type="dict",
+                                        options=dict(
+                                            value=dict(type="str"),
+                                        ),
+                                    ),
+                                    type=dict(type="str", required=True),
+                                ),
+                            ),
+                        },
+                    ),
+                },
+            ),
             name=dict(type="str"),
             propagation_labels=dict(type="list", elements="str", default=[]),
             script_id=dict(type="str"),

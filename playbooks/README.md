@@ -122,7 +122,7 @@ Manage XSOAR 8 scheduled jobs (`cortex.xsoar8.job`).
 
 | Tag | Operation |
 |-----|-----------|
-| `create` | Create a daily job with severity, owner, and tags |
+| `create` | Create a daily job with custom fields, severity, owner, and tags |
 | `create_advanced` | Create a weekly job with end date and a job with custom fields/type |
 | `gather` | Gather all jobs and a specific job by name |
 | `gather_filtered` | Gather jobs matching a free-text query |
@@ -171,7 +171,14 @@ Manage XSOAR 8 pre-process rules (`cortex.xsoar8.pre_process_rule`).
 | `create_link` | Create a rule that links duplicate events to an existing incident |
 | `create_drop_update` | Create a rule that drops and updates the matched incident |
 | `create_script` | Create a rule that runs a custom deduplication script |
-| `disable` | Disable a rule by updating it with `enabled: false` |
+| `disable` | Disable a rule while preserving its existing filters |
+| `preserve_filters` | Run the same disable operation without supplying `filters` |
+| `filter_single` | Create a disabled rule with one incoming-event condition |
+| `filter_or` | Create a disabled rule matching A OR B |
+| `filter_and_or` | Create a disabled rule matching (A OR B) AND C |
+| `filter_boolean` | Create a disabled rule using `isTrue` without a right operand |
+| `filter_empty` | Create a disabled rule using `isEmpty` with `right: {}` |
+| `clear_filters` | Clear incoming-event filters on the single-filter example rule and keep it disabled |
 | `gather` | Gather all rules and a specific rule by name |
 | `delete` | Delete a rule by name |
 
@@ -179,11 +186,59 @@ Manage XSOAR 8 pre-process rules (`cortex.xsoar8.pre_process_rule`).
 ansible-playbook playbooks/pre_process_rule_management.yml --tags create_drop
 ansible-playbook playbooks/pre_process_rule_management.yml --tags create_script \
   -e "dedup_script_id=<script-id>"
+ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_single
+ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_or
+ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_and_or --check
+ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_boolean
+ansible-playbook playbooks/pre_process_rule_management.yml --tags filter_empty
+ansible-playbook playbooks/pre_process_rule_management.yml --tags clear_filters
+ansible-playbook playbooks/pre_process_rule_management.yml --tags preserve_filters
 ansible-playbook playbooks/pre_process_rule_management.yml --tags gather
 ansible-playbook playbooks/pre_process_rule_management.yml --tags delete
 ```
 
 > **Note**: `script_id` is required when `action` is `script`.
+
+#### Incoming-Event Filters
+
+Groups under `filters.and` are AND-connected. Conditions within each `or` group are OR-connected. A single condition still uses one `and` group containing one `or` condition; these grouping keys become nested lists in the API payload.
+
+For example, this matches **(sourceBrand is Azure Sentinel OR Microsoft Graph) AND name is Suspicious login**:
+
+```yaml
+filters:
+  and:
+    - or:
+        - operator: isEqualString
+          left:
+            value: sourceBrand
+          right:
+            value: Azure Sentinel
+          type: sourceBrand
+        - operator: isEqualString
+          left:
+            value: sourceBrand
+          right:
+            value: Microsoft Graph
+          type: sourceBrand
+    - or:
+        - operator: isEqualString
+          left:
+            value: name
+          right:
+            value: Suspicious login
+          type: name
+```
+
+- Operator names are validated against the API's operator metadata, including in check mode.
+- API filter metadata validation occurs only for `state: present`; `filters` does not affect `absent` or `gathered` operations.
+- Operators with `isSingleValue: true`, such as `isTrue`, `isFalse`, `isEmpty`, and `isNotEmpty`, accept an omitted `right` or `right: {}`. Supplying a right value fails validation.
+- Operators with `isSingleValue: false` require a nonempty `right.value`.
+- When `filters` is supplied, the module compares both `newEventFilters` and `readyNewEventFilters`. A mismatch in either field triggers an update that writes the same converted filters to both fields.
+- On update, omitting `filters` preserves existing incoming-event filters. Supplying `filters: {and: []}` clears both `newEventFilters` and `readyNewEventFilters`.
+- New rules without `filters` have empty incoming-event filters. Existing-event filters cannot be configured through this option.
+
+> **Safety**: The filter example rules are created disabled. Review the field names before enabling them; `filter_boolean` requires a Boolean field named `testing` in your instance. Clearing filters on an enabled rule can broaden its matches. Run `filter_single` before `clear_filters` to demonstrate removing existing conditions; if the example rule does not exist, `clear_filters` creates it disabled with empty filters.
 
 ---
 

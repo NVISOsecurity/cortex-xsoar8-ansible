@@ -12,9 +12,13 @@ Contents
 - pre_process_rule_params        — pytest fixture wrapping make_pre_process_rule_params
 - make_pre_process_rule_manager  — factory fixture; call with **overrides per test
 - api_pre_process_rule_response  — realistic XSOAR API response for a pre-process rule object
+- operator_metadata             - mocked operator discovery for filter tests
+- conditions                    - simplified incoming-event filter conditions
 """
 
 from __future__ import annotations
+
+from unittest.mock import patch
 
 import pytest
 
@@ -84,6 +88,42 @@ def make_pre_process_rule_manager(mock_connection, pre_process_rule_params):
         return build_manager(XSOARPreProcessRuleManager, mock_connection, pre_process_rule_params, **overrides)
 
     return _factory
+
+
+@pytest.fixture
+def operator_metadata():
+    """Mock operator discovery with unary and binary operator metadata."""
+    with patch.object(
+        XSOARPreProcessRuleManager,
+        "get_rule_filters",
+        return_value={
+            "isEqualString": {"type": "string", "isSingleValue": False},
+            "isNotEqualString": {"type": "string", "isSingleValue": False},
+            "isTrue": {"type": "boolean", "isSingleValue": True},
+            "isFalse": {"type": "boolean", "isSingleValue": True},
+            "isEmpty": {"type": "general", "isSingleValue": True},
+            "isNotEmpty": {"type": "general", "isSingleValue": True},
+        },
+    ) as discovery:
+        yield discovery
+
+
+@pytest.fixture
+def conditions():
+    """Provide simplified conditions for filter validation and conversion tests."""
+    return [
+        {
+            "operator": operator,
+            "left": {"value": "sourceBrand"},
+            "right": {"value": brand},
+            "type": "sourceBrand",
+        }
+        for operator, brand in [
+            ("isNotEqualString", "Azure Sentinel"),
+            ("isEqualString", "Microsoft Sentinel Fetch Incident"),
+            ("isEqualString", "Microsoft Graph"),
+        ]
+    ]
 
 
 @pytest.fixture

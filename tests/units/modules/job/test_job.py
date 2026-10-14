@@ -141,8 +141,8 @@ class TestBuildJobData:
         assert payload["cron"] == "0 6 * * *"
         assert payload["playbookId"] == "test-playbook"
         assert payload["type"] == "Unclassified"
-        assert not payload["closePrevRun"]
-        assert not payload["shouldTriggerNew"]
+        assert payload["closePrevRun"] is True
+        assert payload["shouldTriggerNew"] is True
         assert not payload["notifyOwner"]
         assert payload["owner"] == ""
         assert payload["severity"] == 0
@@ -283,6 +283,28 @@ class TestUpdateJob:
 
         payload = manager.connection.request.call_args.kwargs["data"]
         assert payload["id"] == "job-abc123"
+
+    def test_update_payload_omits_calculated_run_times(self, make_job_manager, api_job_response):
+        manager = make_job_manager()
+        manager.connection.request.return_value = api_job_response
+        api_job_response.update(
+            {
+                "nextRunTime": "2026-10-13T12:00:00Z",
+                "displayNextRunTime": "2026-10-13T12:00:00Z",
+                "disabledNextRunTime": "2026-10-13T12:00:00Z",
+                "scheduledEntryGuid": "scheduler-entry-id",
+                "jobSchedulingKey": "scheduler-key",
+            }
+        )
+
+        manager.update_job(api_job_response)
+
+        payload = manager.connection.request.call_args.kwargs["data"]
+        assert "nextRunTime" not in payload
+        assert "displayNextRunTime" not in payload
+        assert "disabledNextRunTime" not in payload
+        assert payload["scheduledEntryGuid"] == "scheduler-entry-id"
+        assert payload["jobSchedulingKey"] == "scheduler-key"
 
     def test_calls_fail_json_on_request_failure(self, make_job_manager, api_job_response):
         manager = make_job_manager()

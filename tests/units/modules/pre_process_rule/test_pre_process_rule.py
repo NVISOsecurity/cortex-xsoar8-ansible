@@ -9,13 +9,375 @@ tests/conftest.py and are resolved automatically by pytest.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
 from ansible_collections.cortex.xsoar8.plugins.module_utils.xsoar import XSOARAPIError
 
-from plugins.modules.pre_process_rule import ensure_absent, ensure_present, gather_pre_process_rules
-from tests.conftest import AnsibleModuleFail
+from plugins.modules.pre_process_rule import (
+    XSOARPreProcessRuleManager,
+    ensure_absent,
+    ensure_present,
+    gather_pre_process_rules,
+    main,
+)
+from tests.conftest import AnsibleModuleExit, AnsibleModuleFail
+
+# ===========================================================================
+# XSOARPreProcessRuleManager.get_rule_filters
+# ===========================================================================
+
+class TestGetRuleFilters:
+    def test_returns_response(self, make_pre_process_rule_manager):
+        manager = make_pre_process_rule_manager()
+        response = {"isEqualString": {"type": "string", "isSingleValue": False}}
+        manager.connection.request.return_value = response
+
+        assert manager.get_rule_filters() is response
+        manager.connection.request.assert_called_once_with("GET", "/xsoar/preprocess/filters")
+        manager.module.log.assert_not_called()
+
+    def test_logs_api_failure_and_returns_empty_dict(self, make_pre_process_rule_manager):
+        manager = make_pre_process_rule_manager()
+        manager.connection.request.side_effect = XSOARAPIError("network error")
+
+        assert manager.get_rule_filters() == {}
+        manager.module.log.assert_called_once_with(msg="Failed to get pre-process rule filters: network error")
+
+
+# ===========================================================================
+# XSOARPreProcessRuleManager.validate_filters and build_filters
+# ===========================================================================
+
+
+@pytest.mark.usefixtures("operator_metadata")
+class TestRuleFilters:
+    @pytest.mark.parametrize("condition_groups", [
+        ((0,),),
+        ((0, 1),),
+        ((0,), (1,), (2,)),
+        ((0, 1), (2,)),
+    ], ids=["single-filter", "or-only", "and-only", "and-or"])
+    def test_converts_and_or_groups_to_payload(self, make_pre_process_rule_manager, conditions, condition_groups):
+        filters = {"and": [{"or": [conditions[index] for index in group]} for group in condition_groups]}
+        original = deepcopy(filters)
+        manager = make_pre_process_rule_manager(filters=filters)
+
+        expected = [
+            {
+                "operator": condition["operator"],
+                "left": {"value": {"simple": "sourceBrand"}, "isContext": True},
+                "right": {"value": {"simple": condition["right"]["value"]}, "isContext": False},
+                "type": "sourceBrand",
+            }
+            for condition in conditions
+        ]
+        expected_groups = [[expected[index] for index in group] for group in condition_groups]
+        payload = manager.build_rule_data()
+        assert payload["newEventFilters"] == expected_groups
+        assert payload["readyNewEventFilters"] == expected_groups
+        assert filters == original
+
+    def test_build_filters_does_not_fetch_metadata(self, make_pre_process_rule_manager, conditions, operator_metadata):
+        manager = make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+        operator_metadata.reset_mock()
+
+        assert manager.build_filters() == manager.rule_filters
+        operator_metadata.assert_not_called()
+
+    def test_validate_filters_does_not_mutate_input(self, make_pre_process_rule_manager, conditions, operator_metadata):
+        manager = make_pre_process_rule_manager()
+        manager.filters = {"and": [{"or": conditions}]}
+        original = deepcopy(manager.filters)
+
+        assert manager.validate_filters() is None
+
+        assert manager.filters == original
+        assert manager.rule_filters == []
+        operator_metadata.assert_called_once()
+        manager.module.log.assert_not_called()
+
+    def test_validate_filters_rejects_invalid_input_independently(self, make_pre_process_rule_manager, conditions):
+        manager = make_pre_process_rule_manager()
+        conditions[0]["operator"] = "unknown"
+        manager.filters = {"and": [{"or": conditions}]}
+
+        with pytest.raises(AnsibleModuleFail, match="unknown operator 'unknown'"):
+            manager.validate_filters()
+        manager.module.log.assert_not_called()
+        manager.module.fail_json.assert_called_once_with(
+            msg="filters.and[0].or[0].operator: unknown operator 'unknown'."
+        )
+
+    @pytest.mark.parametrize("filters", [None, {"and": []}])
+    def test_empty_filters_validate_without_metadata(self, make_pre_process_rule_manager, operator_metadata, filters):
+        manager = make_pre_process_rule_manager(filters=filters)
+
+        if filters is not None:
+            assert manager.validate_filters() is None
+            assert manager.build_filters() == []
+        assert manager.rule_filters == []
+        operator_metadata.assert_not_called()
+        manager.module.log.assert_not_called()
+
+    @pytest.mark.parametrize("failure", ["empty_group", "missing_metadata", "missing_right", "unary_right"])
+    def test_validation_terminates_for_each_failure(self, make_pre_process_rule_manager, conditions, operator_metadata, failure):
+        manager = make_pre_process_rule_manager()
+        manager.filters = {"and": [{"or": conditions}]}
+        if failure == "empty_group":
+            manager.filters["and"][0]["or"] = []
+        elif failure == "missing_metadata":
+            operator_metadata.return_value = {}
+        elif failure == "missing_right":
+            del conditions[0]["right"]
+        else:
+            conditions[0]["operator"] = "isTrue"
+
+        with pytest.raises(AnsibleModuleFail) as error:
+            manager.validate_filters()
+        manager.module.log.assert_not_called()
+        manager.module.fail_json.assert_called_once_with(msg=error.value.kwargs["msg"])
+
+    def test_invalid_filters_stop_before_building(self, make_pre_process_rule_manager, conditions):
+        conditions[0]["operator"] = "unknown"
+        with patch.object(XSOARPreProcessRuleManager, "build_filters") as build:
+            with pytest.raises(AnsibleModuleFail, match="unknown operator"):
+                make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+            build.assert_not_called()
+
+    @pytest.mark.parametrize("right", [None, {}, {"value": None}])
+    @pytest.mark.parametrize("operator", ["isTrue", "isFalse", "isEmpty", "isNotEmpty"])
+    def test_unary_operator_allows_empty_right(self, make_pre_process_rule_manager, operator, right):
+        condition = {"operator": operator, "left": {"value": "testing"}, "type": "testing"}
+        if right is not None:
+            condition["right"] = right
+        manager = make_pre_process_rule_manager(filters={"and": [{"or": [condition]}]})
+
+        assert manager.rule_filters == [[{
+            "operator": operator,
+            "left": {"value": {"simple": "testing"}, "isContext": True},
+            "right": {},
+            "type": "testing",
+        }]]
+
+    @pytest.mark.parametrize("right", [None, {}, {"value": None}, {"value": ""}])
+    def test_binary_operator_requires_right_value(self, make_pre_process_rule_manager, conditions, right):
+        conditions[0]["right"] = right
+        with pytest.raises(AnsibleModuleFail, match=r"filters.and\[0\].or\[0\].right.value is required"):
+            make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+
+    @pytest.mark.parametrize("operator", ["isTrue", "isFalse", "isEmpty", "isNotEmpty"])
+    def test_unary_operator_rejects_right_value(self, make_pre_process_rule_manager, operator):
+        condition = {"operator": operator, "left": {"value": "testing"}, "right": {"value": "true"}, "type": "testing"}
+        with pytest.raises(AnsibleModuleFail, match="requires an empty operand"):
+            make_pre_process_rule_manager(filters={"and": [{"or": [condition]}]})
+
+    def test_rejects_unknown_operator(self, make_pre_process_rule_manager, conditions):
+        conditions[0]["operator"] = "unknown"
+        with pytest.raises(AnsibleModuleFail, match="unknown operator 'unknown'"):
+            make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+
+    @pytest.mark.parametrize("metadata", [
+        {}, [], {"isNotEqualString": "string"},
+    ])
+    def test_rejects_unavailable_or_invalid_metadata(self, make_pre_process_rule_manager, conditions, operator_metadata, metadata):
+        operator_metadata.return_value = metadata
+        with pytest.raises(AnsibleModuleFail, match="metadata"):
+            make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+
+    def test_update_uses_converted_filters(self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions, operator_metadata):
+        manager = make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+
+        payload = manager.build_rule_data(api_pre_process_rule_response)
+        assert payload["newEventFilters"] == manager.rule_filters
+        assert payload["readyNewEventFilters"] == manager.rule_filters
+        assert dict(manager.fields_to_compare)["newEventFilters"] == manager.rule_filters
+        assert api_pre_process_rule_response["newEventFilters"] == []
+        operator_metadata.assert_called_once()
+
+    def test_update_preserves_omitted_filters(
+        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions
+    ):
+        manager = make_pre_process_rule_manager()
+        api_pre_process_rule_response["newEventFilters"] = [conditions]
+        api_pre_process_rule_response["readyNewEventFilters"] = [conditions]
+
+        payload = manager.build_rule_data(api_pre_process_rule_response)
+        assert payload["newEventFilters"] == [conditions]
+        assert payload["readyNewEventFilters"] == [conditions]
+        assert "newEventFilters" not in dict(manager.fields_to_compare)
+
+    def test_explicit_empty_and_clears_filters(
+        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions
+    ):
+        manager = make_pre_process_rule_manager(filters={"and": []})
+        api_pre_process_rule_response["newEventFilters"] = [conditions]
+        api_pre_process_rule_response["readyNewEventFilters"] = [conditions]
+
+        payload = manager.build_rule_data(api_pre_process_rule_response)
+        assert payload["newEventFilters"] == []
+        assert payload["readyNewEventFilters"] == []
+        assert api_pre_process_rule_response["newEventFilters"] == [conditions]
+        assert api_pre_process_rule_response["readyNewEventFilters"] == [conditions]
+        assert dict(manager.fields_to_compare)["newEventFilters"] == []
+
+    def test_clearing_filters_is_idempotent(self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions):
+        manager = make_pre_process_rule_manager(filters={"and": []})
+        api_pre_process_rule_response["newEventFilters"] = [conditions]
+        api_pre_process_rule_response["readyNewEventFilters"] = [conditions]
+
+        def request(method, endpoint, data=None):
+            if method == "POST":
+                api_pre_process_rule_response.update(data)
+            return [api_pre_process_rule_response]
+
+        manager.connection.request.side_effect = request
+
+        assert ensure_present(manager.module, manager)["changed"] is True
+        assert api_pre_process_rule_response["newEventFilters"] == []
+        assert api_pre_process_rule_response["readyNewEventFilters"] == []
+        assert ensure_present(manager.module, manager)["changed"] is False
+
+    @pytest.mark.parametrize("has_existing_filters", [False, True])
+    def test_clearing_filters_in_check_mode(
+        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions, operator_metadata,
+        has_existing_filters,
+    ):
+        manager = make_pre_process_rule_manager(filters={"and": []})
+        manager.module.check_mode = True
+        existing_filters = [conditions] if has_existing_filters else []
+        api_pre_process_rule_response["newEventFilters"] = existing_filters
+        api_pre_process_rule_response["readyNewEventFilters"] = existing_filters
+        original = deepcopy(api_pre_process_rule_response)
+        manager.connection.request.return_value = [api_pre_process_rule_response]
+
+        result = ensure_present(manager.module, manager)
+
+        assert result["changed"] is has_existing_filters
+        assert result["pre_process_rule"] == original
+        assert api_pre_process_rule_response == original
+        manager.connection.request.assert_called_once_with("GET", "/xsoar/preprocess/rules")
+        operator_metadata.assert_not_called()
+
+    @pytest.mark.parametrize("group_index, condition_index", [(0, 1), (1, 0), (1, 1)])
+    @pytest.mark.parametrize("invalid_field", ["operator", "right", "unary_right"])
+    def test_rejects_errors_in_later_conditions(
+        self, make_pre_process_rule_manager, conditions, mock_module, group_index, condition_index, invalid_field,
+    ):
+        filters = {"and": [{"or": deepcopy(conditions[:2])}, {"or": deepcopy(conditions[1:])}]}
+        invalid_condition = filters["and"][group_index]["or"][condition_index]
+        if invalid_field == "operator":
+            invalid_condition["operator"] = "unknown"
+        elif invalid_field == "right":
+            del invalid_condition["right"]
+        else:
+            invalid_condition["operator"] = "isTrue"
+        error_path = rf"filters\.and\[{group_index}\]\.or\[{condition_index}\]"
+
+        with patch.object(XSOARPreProcessRuleManager, "build_filters") as build:
+            with pytest.raises(AnsibleModuleFail, match=error_path):
+                make_pre_process_rule_manager(filters=filters)
+            build.assert_not_called()
+        mock_module.fail_json.assert_called_once()
+
+    def test_rejects_empty_or_group(self, make_pre_process_rule_manager):
+        with pytest.raises(AnsibleModuleFail, match="at least one condition"):
+            make_pre_process_rule_manager(filters={"and": [{"or": []}]})
+
+    @pytest.mark.parametrize("check_mode", [False, True])
+    @pytest.mark.parametrize("new_filters_match", [False, True])
+    @pytest.mark.parametrize("ready_filters_match", [False, True])
+    def test_ensure_present_compares_filters(
+        self, make_pre_process_rule_manager, api_pre_process_rule_response, conditions, check_mode,
+        new_filters_match, ready_filters_match,
+    ):
+        manager = make_pre_process_rule_manager(filters={"and": [{"or": conditions}]})
+        manager.module.check_mode = check_mode
+        api_pre_process_rule_response["newEventFilters"] = manager.rule_filters if new_filters_match else []
+        api_pre_process_rule_response["readyNewEventFilters"] = manager.rule_filters if ready_filters_match else []
+        manager.connection.request.return_value = [api_pre_process_rule_response]
+
+        result = ensure_present(manager.module, manager)
+
+        filters_match = new_filters_match and ready_filters_match
+        assert result["changed"] is (not filters_match)
+        post_calls = [call for call in manager.connection.request.call_args_list if call.args[0] == "POST"]
+        assert len(post_calls) == (0 if filters_match or check_mode else 1)
+        if post_calls:
+            assert post_calls[0].kwargs["data"]["newEventFilters"] == manager.rule_filters
+            assert post_calls[0].kwargs["data"]["readyNewEventFilters"] == manager.rule_filters
+
+
+# ===========================================================================
+# main argument validation
+# ===========================================================================
+
+
+class TestFilterArguments:
+    @pytest.mark.parametrize("operator", ["isEqualString", "isTrue", "isEmpty", "isNotEmpty"])
+    @pytest.mark.parametrize("missing_field", [None, "and", "or", "operator", "left", "left.value", "right", "type"])
+    def test_ansible_validates_nested_conditions(self, provider_params, mock_connection, missing_field, operator):
+        condition = {
+            "operator": operator,
+            "left": {"value": "sourceBrand"},
+            "right": {"value": "Microsoft Graph"} if operator == "isEqualString" else {},
+            "type": "sourceBrand",
+        }
+        if missing_field == "left.value":
+            del condition["left"]["value"]
+        elif missing_field not in (None, "and", "or"):
+            del condition[missing_field]
+        filter_group = {} if missing_field == "or" else {"or": [condition]}
+        params = {
+            "provider": provider_params,
+            "name": "test-rule",
+            "action": "drop",
+            "filters": {} if missing_field == "and" else {"and": [filter_group]},
+            "_ansible_check_mode": True,
+        }
+
+        def connect(module):
+            mock_connection.module = module
+            mock_connection.request.side_effect = lambda method, endpoint: {
+                "isEqualString": {"type": "string", "isSingleValue": False},
+                "isTrue": {"type": "boolean", "isSingleValue": True},
+                "isEmpty": {"type": "general", "isSingleValue": True},
+                "isNotEmpty": {"type": "general", "isSingleValue": True},
+            } if endpoint == "/xsoar/preprocess/filters" else []
+            return mock_connection
+
+        with (
+            patch("ansible.module_utils.basic._load_params", return_value=params),
+            patch(
+                "ansible.module_utils.basic.AnsibleModule.exit_json",
+                side_effect=lambda **kwargs: (_ for _ in ()).throw(AnsibleModuleExit(**kwargs)),
+            ),
+            patch(
+                "ansible.module_utils.basic.AnsibleModule.fail_json",
+                side_effect=lambda **kwargs: (_ for _ in ()).throw(AnsibleModuleFail(**kwargs)),
+            ),
+            patch("plugins.modules.pre_process_rule.get_connection", side_effect=connect) as get_connection,
+        ):
+            if missing_field and not (missing_field == "right" and operator != "isEqualString"):
+                missing_argument = missing_field.split(".")[-1]
+                with pytest.raises(AnsibleModuleFail, match=missing_argument):
+                    main()
+                if missing_field == "right":
+                    get_connection.assert_called_once()
+                else:
+                    get_connection.assert_not_called()
+            else:
+                with pytest.raises(AnsibleModuleExit) as result:
+                    main()
+                right = {"value": {"simple": "Microsoft Graph"}, "isContext": False} if operator == "isEqualString" else {}
+                assert result.value.kwargs["pre_process_rule"]["newEventFilters"] == [[{
+                    "operator": operator,
+                    "left": {"value": {"simple": "sourceBrand"}, "isContext": True},
+                    "right": right,
+                    "type": "sourceBrand",
+                }]]
+                assert result.value.kwargs["changed"] is True
 
 # ===========================================================================
 # XSOARPreProcessRuleManager.get_pre_process_rules
@@ -106,6 +468,8 @@ class TestBuildRuleData:
         assert payload["shouldPublish"]
         assert payload["shouldCommit"]
         assert payload["commitMessage"] == "Preprocess rule edited"
+        assert payload["newEventFilters"] == []
+        assert payload["readyNewEventFilters"] == []
 
     def test_update_payload(self, make_pre_process_rule_manager, api_pre_process_rule_response):
         """
